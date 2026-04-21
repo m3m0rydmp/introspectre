@@ -1,0 +1,24 @@
+[patterns.sensitive_fields]
+names = ["email", "username", "phone", "mpin", "wallet_id", "mobile_number"]
+
+[patterns.ssrf_args]
+names = ["url", "webhook", "callback", "redirect", "endpoint", "image_url"]
+
+[patterns.idor_mutations]
+prefixes = ["delete", "remove", "update", "download", "export"]
+
+[patterns.debug_types]
+names = ["admin", "internal", "debug", "private", "test", "dev", "staging"]
+
+[patterns.operation_names]
+names = []
+
+[session]
+auth_header = "Authorization=Bearer YOUR_TOKEN_HERE"
+user_id = ""
+owned_ids = []
+
+[audit]
+test_unauth = true
+test_idor = true
+test_injection = false

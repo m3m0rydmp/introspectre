@@ -14,9 +14,21 @@ pub struct Cli {
     #[command(subcommand)]
     pub command: Commands,
 
+    /// Path to TOML config file
+    #[arg(long, global = true)]
+    pub config: Option<PathBuf>,
+
+    /// Merge additional words from file into patterns: <type>=<path> (repeatable)
+    #[arg(long, global = true, value_name = "TYPE=PATH")]
+    pub wordlist: Vec<String>,
+
     /// Output format: text (default) or json
     #[arg(long, default_value = "text", global = true)]
     pub format: OutputFormat,
+
+    /// Max affected entries shown per finding in text/markdown output (0 = no limit)
+    #[arg(long, default_value_t = 30, global = true)]
+    pub max_affected: usize,
 
     /// Show only findings at or above this level: low | medium | high
     #[arg(long, global = true)]
@@ -33,6 +45,10 @@ pub struct Cli {
     /// HTML report output path
     #[arg(long, default_value = "gql-analyzer-report.html", global = true)]
     pub html_path: PathBuf,
+
+    /// Show verbose details in text output (includes PoC blocks when available)
+    #[arg(long, default_value_t = false, global = true)]
+    pub verbose: bool,
 }
 
 #[derive(Subcommand)]
@@ -72,6 +88,25 @@ pub enum Commands {
         probe_only: bool,
     },
 
+    /// Active probing audit flow using schema-derived candidates
+    Audit {
+        /// GraphQL endpoint URL
+        url: String,
+
+        /// Extra request headers as key=value pairs (repeatable)
+        /// Example: --header "Authorization=Bearer token"
+        #[arg(short = 'H', long = "header", value_name = "KEY=VALUE")]
+        headers: Vec<String>,
+
+        /// Timeout in seconds for each HTTP request
+        #[arg(long, default_value_t = 15)]
+        timeout: u64,
+
+        /// Client-side delay before issuing requests (milliseconds)
+        #[arg(long, default_value_t = 750)]
+        rate_limit_ms: u64,
+    },
+
     /// Analyze a schema already saved to a JSON file
     File {
         /// Path to the introspection JSON file
@@ -83,4 +118,5 @@ pub enum Commands {
 pub enum OutputFormat {
     Text,
     Json,
+    Markdown,
 }

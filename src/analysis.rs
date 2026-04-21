@@ -1,16 +1,14 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
-use crate::types::{EvidenceLevel, Finding, GqlField, GqlSchema, GqlType, GqlTypeRef, SchemaStats, Severity};
+use crate::config::PatternConfig;
+use crate::types::{Confidence, EvidenceLevel, Finding, GqlField, GqlSchema, GqlType, GqlTypeRef, SchemaStats, Severity};
 
-const SENSITIVE_PATTERNS: &[&str] = &[
-    "password", "passwd", "pwd", "secret", "token", "apikey", "api_key", "auth", "credential",
-    "private", "ssn", "credit", "card", "cvv", "otp", "pin", "hash", "salt", "session",
-    "cookie", "bearer", "key",
-];
-
-fn matches_sensitive(name: &str) -> bool {
+fn matches_pattern(name: &str, patterns: &[String]) -> bool {
     let lower = name.to_lowercase();
-    SENSITIVE_PATTERNS.iter().any(|p| lower.contains(p))
+    patterns.iter().any(|p| {
+        let candidate = p.trim().to_lowercase();
+        !candidate.is_empty() && lower.contains(&candidate)
+    })
 }
 
 pub fn unwrap_type_name(t: &GqlTypeRef) -> Option<String> {
@@ -47,7 +45,7 @@ pub fn fields_for_type<'a>(schema: &'a GqlSchema, type_name: Option<&str>) -> Ve
         .unwrap_or_default()
 }
 
-pub fn analyze(schema: &GqlSchema) -> (Vec<Finding>, SchemaStats) {
+pub fn analyze(schema: &GqlSchema, patterns: &PatternConfig) -> (Vec<Finding>, SchemaStats) {
     let mut findings: Vec<Finding> = Vec::new();
     let types = user_types(schema);
 
@@ -100,7 +98,9 @@ pub fn analyze(schema: &GqlSchema) -> (Vec<Finding>, SchemaStats) {
             affected: vec!["__schema".into(), "__type".into()],
             remediation: "Disable introspection in production (set `introspection: false` in your server config). Allow-list only via internal tooling or developer environments.",
             references: vec!["CWE-200: Information Exposure", "OWASP API Security Top 10"],
-            evidence_level: EvidenceLevel::Inferred,
+            confidence: Confidence::Theoretical,
+                evidence_level: EvidenceLevel::Inferred,
+            poc: None,
         });
     }
 
@@ -109,14 +109,14 @@ pub fn analyze(schema: &GqlSchema) -> (Vec<Finding>, SchemaStats) {
         let type_name = t.name.as_deref().unwrap_or("?");
         if let Some(fields) = &t.fields {
             for f in fields {
-                if matches_sensitive(&f.name) {
+                if matches_pattern(&f.name, &patterns.sensitive_fields.names) {
                     sensitive.push(format!("{}.{}", type_name, f.name));
                 }
             }
         }
         if let Some(input_fields) = &t.input_fields {
             for f in input_fields {
-                if matches_sensitive(&f.name) {
+                if matches_pattern(&f.name, &patterns.sensitive_fields.names) {
                     sensitive.push(format!("{}(input).{}", type_name, f.name));
                 }
             }
@@ -134,7 +134,9 @@ pub fn analyze(schema: &GqlSchema) -> (Vec<Finding>, SchemaStats) {
             affected: sensitive.into_iter().take(25).collect(),
             remediation: "Add field-level authorization for all sensitive fields. Consider masking, omitting from schema entirely, or using opaque identifiers.",
             references: vec!["OWASP API3: Excessive Data Exposure", "CWE-312: Cleartext Storage"],
-            evidence_level: EvidenceLevel::Inferred,
+            confidence: Confidence::Theoretical,
+                evidence_level: EvidenceLevel::Inferred,
+            poc: None,
         });
     }
 
@@ -208,7 +210,9 @@ pub fn analyze(schema: &GqlSchema) -> (Vec<Finding>, SchemaStats) {
             affected: circular.into_iter().take(15).collect(),
             remediation: "Implement query depth limiting (recommended max: 7-10 levels). Use graphql-depth-limit, graphql-query-complexity, or built-in server options. Set a hard timeout on query execution.",
             references: vec!["CWE-400: Uncontrolled Resource Consumption", "OWASP API4: Lack of Resources"],
-            evidence_level: EvidenceLevel::Inferred,
+            confidence: Confidence::Theoretical,
+                evidence_level: EvidenceLevel::Inferred,
+            poc: None,
         });
     }
 
@@ -256,7 +260,9 @@ pub fn analyze(schema: &GqlSchema) -> (Vec<Finding>, SchemaStats) {
             affected: dos_list_inflation.into_iter().take(20).collect(),
             remediation: "Implement strict pagination limits and query-cost analysis. Cap result sizes and enforce maximum complexity per request.",
             references: vec!["OWASP API4: Lack of Resources", "CWE-770: Allocation of Resources Without Limits"],
-            evidence_level: EvidenceLevel::Inferred,
+            confidence: Confidence::Theoretical,
+                evidence_level: EvidenceLevel::Inferred,
+            poc: None,
         });
     }
 
@@ -289,7 +295,9 @@ pub fn analyze(schema: &GqlSchema) -> (Vec<Finding>, SchemaStats) {
             affected: self_recursive_fields.into_iter().take(20).collect(),
             remediation: "Enforce a max query depth rule (commonly 5-10), apply complexity scoring, and enforce execution timeouts.",
             references: vec!["CWE-400: Uncontrolled Resource Consumption", "OWASP API4: Lack of Resources"],
-            evidence_level: EvidenceLevel::Inferred,
+            confidence: Confidence::Theoretical,
+                evidence_level: EvidenceLevel::Inferred,
+            poc: None,
         });
     }
 
@@ -329,7 +337,9 @@ pub fn analyze(schema: &GqlSchema) -> (Vec<Finding>, SchemaStats) {
                 "OWASP API1: Broken Object Level Authorization",
                 "OWASP API5: Broken Function Level Authorization",
             ],
-            evidence_level: EvidenceLevel::Inferred,
+            confidence: Confidence::Theoretical,
+                evidence_level: EvidenceLevel::Inferred,
+            poc: None,
         });
     }
 
@@ -349,7 +359,9 @@ pub fn analyze(schema: &GqlSchema) -> (Vec<Finding>, SchemaStats) {
                 .collect(),
             remediation: "Require authentication for all subscriptions. Enforce per-user connection limits and rate-limit subscription creation. Validate all subscription filter payloads server-side.",
             references: vec!["CWE-770: Allocation of Resources Without Limits"],
-            evidence_level: EvidenceLevel::Inferred,
+            confidence: Confidence::Theoretical,
+                evidence_level: EvidenceLevel::Inferred,
+            poc: None,
         });
     }
 
@@ -365,7 +377,9 @@ pub fn analyze(schema: &GqlSchema) -> (Vec<Finding>, SchemaStats) {
             affected: vec![format!("{} total mutations", mutation_fields.len())],
             remediation: "Audit each mutation for authorization requirements. Consider splitting schemas by role/context, or use persisted/allow-listed queries to limit operations.",
             references: vec!["OWASP API6: Mass Assignment", "CWE-915: Improperly Controlled Modification"],
-            evidence_level: EvidenceLevel::Inferred,
+            confidence: Confidence::Theoretical,
+                evidence_level: EvidenceLevel::Inferred,
+            poc: None,
         });
     }
 
@@ -399,7 +413,9 @@ pub fn analyze(schema: &GqlSchema) -> (Vec<Finding>, SchemaStats) {
             affected: deprecated.into_iter().take(20).collect(),
             remediation: "Remove deprecated fields or block access server-side. If kept for backward compatibility, ensure they have equivalent security controls to new fields.",
             references: vec!["CWE-477: Use of Obsolete Function"],
-            evidence_level: EvidenceLevel::Inferred,
+            confidence: Confidence::Theoretical,
+                evidence_level: EvidenceLevel::Inferred,
+            poc: None,
         });
     }
 
@@ -407,11 +423,18 @@ pub fn analyze(schema: &GqlSchema) -> (Vec<Finding>, SchemaStats) {
         .iter()
         .filter(|t| t.kind.as_deref() == Some("ENUM"))
         .filter(|t| {
-            let name_sensitive = t.name.as_deref().map(matches_sensitive).unwrap_or(false);
+            let name_sensitive = t
+                .name
+                .as_deref()
+                .map(|n| matches_pattern(n, &patterns.sensitive_fields.names))
+                .unwrap_or(false);
             let values_sensitive = t
                 .enum_values
                 .as_ref()
-                .map(|vs| vs.iter().any(|v| matches_sensitive(&v.name)))
+                .map(|vs| {
+                    vs.iter()
+                        .any(|v| matches_pattern(&v.name, &patterns.sensitive_fields.names))
+                })
                 .unwrap_or(false);
             name_sensitive || values_sensitive
         })
@@ -437,7 +460,9 @@ pub fn analyze(schema: &GqlSchema) -> (Vec<Finding>, SchemaStats) {
             affected: sensitive_enums,
             remediation: "Avoid exposing internal role/permission enums publicly. Use opaque identifiers and validate enum values strictly server-side.",
             references: vec!["CWE-200: Information Exposure"],
-            evidence_level: EvidenceLevel::Inferred,
+            confidence: Confidence::Theoretical,
+                evidence_level: EvidenceLevel::Inferred,
+            poc: None,
         });
     }
 
@@ -470,7 +495,9 @@ pub fn analyze(schema: &GqlSchema) -> (Vec<Finding>, SchemaStats) {
             affected: bloated,
             remediation: "Apply principle of least privilege to schema design. Split types by role (e.g. UserPublic vs UserAdmin). Add field-level resolvers with auth checks.",
             references: vec!["OWASP API3: Excessive Data Exposure"],
-            evidence_level: EvidenceLevel::Inferred,
+            confidence: Confidence::Theoretical,
+                evidence_level: EvidenceLevel::Inferred,
+            poc: None,
         });
     }
 
@@ -506,7 +533,9 @@ pub fn analyze(schema: &GqlSchema) -> (Vec<Finding>, SchemaStats) {
             affected: list_queries.into_iter().take(15).collect(),
             remediation: "Implement complexity-aware rate limiting that accounts for GraphQL aliasing. Limit the number of aliases per request. Add pagination limits with enforced maximums.",
             references: vec!["CWE-770: Resource Exhaustion", "OWASP API4: Lack of Resources"],
-            evidence_level: EvidenceLevel::Inferred,
+            confidence: Confidence::Theoretical,
+                evidence_level: EvidenceLevel::Inferred,
+            poc: None,
         });
     }
 
@@ -541,22 +570,18 @@ pub fn analyze(schema: &GqlSchema) -> (Vec<Finding>, SchemaStats) {
             affected: untyped_mutations.into_iter().take(20).collect(),
             remediation: "Replace generic String/ID arguments with typed Input objects and custom scalars (e.g. EmailAddress, URL, UUID). Validate all inputs server-side regardless of scalar type.",
             references: vec!["CWE-20: Improper Input Validation", "OWASP API8: Injection"],
-            evidence_level: EvidenceLevel::Inferred,
+            confidence: Confidence::Theoretical,
+                evidence_level: EvidenceLevel::Inferred,
+            poc: None,
         });
     }
 
-    let debug_patterns = &[
-        "debug", "internal", "admin", "private", "test", "dev", "staging", "root",
-    ];
     let debug_types: Vec<String> = types
         .iter()
         .filter(|t| {
             t.name
                 .as_deref()
-                .map(|n| {
-                    let lower = n.to_lowercase();
-                    debug_patterns.iter().any(|p| lower.contains(p))
-                })
+                .map(|n| matches_pattern(n, &patterns.debug_types.names))
                 .unwrap_or(false)
         })
         .map(|t| t.name.as_deref().unwrap_or("?").to_string())
@@ -574,7 +599,213 @@ pub fn analyze(schema: &GqlSchema) -> (Vec<Finding>, SchemaStats) {
             affected: debug_types,
             remediation: "Remove internal/debug types from the public schema. Use schema stitching or type visibility rules to expose only what external clients need.",
             references: vec!["CWE-489: Active Debug Code", "OWASP API7: Security Misconfiguration"],
-            evidence_level: EvidenceLevel::Inferred,
+            confidence: Confidence::Theoretical,
+                evidence_level: EvidenceLevel::Inferred,
+            poc: None,
+        });
+    }
+
+    let idor_arg_matches = |arg_name: &str| {
+        let lower = arg_name.to_lowercase();
+        matches!(
+            lower.as_str(),
+            "id" | "uuid" | "userid" | "documentid"
+        ) || lower.ends_with("id")
+            || lower.ends_with("_id")
+    };
+
+    let mut idor_candidates: Vec<String> = Vec::new();
+    for (root_name, fields) in [("Query", &query_fields), ("Mutation", &mutation_fields)] {
+        for field in fields {
+            if let Some(args) = &field.args {
+                for arg in args {
+                    if idor_arg_matches(&arg.name) {
+                        idor_candidates.push(format!("{}.{}({})", root_name, field.name, arg.name));
+                    }
+                }
+            }
+        }
+    }
+    idor_candidates.sort();
+    idor_candidates.dedup();
+
+    if !idor_candidates.is_empty() {
+        findings.push(Finding {
+            id: "GQL-013",
+            severity: Severity::Medium,
+            title: "IDOR Candidate Detection",
+            description: format!(
+                "{} query/mutation argument(s) appear to accept object identifiers. These are potential BOLA/IDOR candidates if ownership checks are missing server-side.",
+                idor_candidates.len()
+            ),
+            affected: idor_candidates.into_iter().take(30).collect(),
+            remediation: "Enforce object-level authorization on every resolver that accepts identifiers (id, uuid, *Id, *_id). Validate caller ownership before returning or mutating records.",
+            references: vec!["OWASP API1: Broken Object Level Authorization", "CWE-639: Authorization Bypass Through User-Controlled Key"],
+            confidence: Confidence::Possible,
+                evidence_level: EvidenceLevel::Inferred,
+            poc: None,
+        });
+    }
+
+    let mut ssrf_candidates: Vec<String> = Vec::new();
+    for (root_name, fields) in [("Query", &query_fields), ("Mutation", &mutation_fields)] {
+        for field in fields {
+            if let Some(args) = &field.args {
+                for arg in args {
+                    if matches_pattern(&arg.name, &patterns.ssrf_args.names) {
+                        ssrf_candidates.push(format!("{}.{}({})", root_name, field.name, arg.name));
+                    }
+                }
+            }
+        }
+    }
+    ssrf_candidates.sort();
+    ssrf_candidates.dedup();
+
+    if !ssrf_candidates.is_empty() {
+        findings.push(Finding {
+            id: "GQL-014",
+            severity: Severity::Medium,
+            title: "SSRF Candidate Detection",
+            description: format!(
+                "{} query/mutation argument(s) match SSRF-related URL/webhook patterns. If backend services fetch these values, SSRF may be possible.",
+                ssrf_candidates.len()
+            ),
+            affected: ssrf_candidates.into_iter().take(30).collect(),
+            remediation: "Block internal network destinations, enforce strict URL allow-lists, and isolate outbound fetchers. Never allow resolver-controlled requests to metadata or loopback addresses.",
+            references: vec!["OWASP API8: Injection", "CWE-918: Server-Side Request Forgery (SSRF)"],
+            confidence: Confidence::Possible,
+                evidence_level: EvidenceLevel::Inferred,
+            poc: None,
+        });
+    }
+
+    let mut mutation_name_set: HashSet<String> = HashSet::new();
+    for m in &mutation_fields {
+        mutation_name_set.insert(m.name.to_lowercase());
+    }
+
+    let mut operation_gap_candidates: Vec<String> = Vec::new();
+    for m in &mutation_fields {
+        let lower = m.name.to_lowercase();
+        if !lower.starts_with("create") {
+            continue;
+        }
+
+        let resource = &m.name["create".len()..];
+        if resource.is_empty() {
+            continue;
+        }
+
+        let resource_lower = resource.to_lowercase();
+        let update_lower = format!("update{}", resource_lower);
+        let delete_lower = format!("delete{}", resource_lower);
+
+        let mut missing_ops: Vec<String> = Vec::new();
+        if !mutation_name_set.contains(&update_lower) {
+            missing_ops.push(format!("update{}", resource));
+        }
+        if !mutation_name_set.contains(&delete_lower) {
+            missing_ops.push(format!("delete{}", resource));
+        }
+
+        if !missing_ops.is_empty() {
+            operation_gap_candidates.push(format!(
+                "Mutation.{} (missing: {})",
+                m.name,
+                missing_ops.join(", ")
+            ));
+        }
+    }
+    operation_gap_candidates.sort();
+    operation_gap_candidates.dedup();
+
+    if !operation_gap_candidates.is_empty() {
+        findings.push(Finding {
+            id: "GQL-015",
+            severity: Severity::Low,
+            title: "Undocumented Operation Name Gaps",
+            description: format!(
+                "{} create* mutation(s) are missing expected update/delete counterparts. This can indicate hidden or inconsistent operation design worth deeper review.",
+                operation_gap_candidates.len()
+            ),
+            affected: operation_gap_candidates.into_iter().take(30).collect(),
+            remediation: "Review mutation lifecycle consistency (create/update/delete) per resource and ensure undocumented operations are not exposed elsewhere with weaker controls.",
+            references: vec!["OWASP API9: Improper Inventory Management"],
+            confidence: Confidence::Possible,
+                evidence_level: EvidenceLevel::Inferred,
+            poc: None,
+        });
+    }
+
+    let user_scope_hints = ["userid", "user_id", "ownerid", "owner_id", "email"];
+    let cross_domain_hints = [
+        "programdata",
+        "program_data",
+        "paymentinfo",
+        "payment_info",
+        "privatecomment",
+        "private_comment",
+        "reportsources",
+        "report_sources",
+    ];
+
+    let mut leakage_candidates: Vec<String> = Vec::new();
+    for t in &types {
+        if t.kind.as_deref() != Some("OBJECT") {
+            continue;
+        }
+
+        let type_name = t.name.as_deref().unwrap_or("");
+        if type_name.is_empty() || ["Query", "Mutation", "Subscription"].contains(&type_name) {
+            continue;
+        }
+
+        let mut user_fields: Vec<String> = Vec::new();
+        let mut cross_fields: Vec<String> = Vec::new();
+
+        if let Some(fields) = &t.fields {
+            for f in fields {
+                let lower = f.name.to_lowercase();
+                if user_scope_hints.iter().any(|h| lower.contains(h)) {
+                    user_fields.push(f.name.clone());
+                }
+                if cross_domain_hints.iter().any(|h| lower.contains(h)) {
+                    cross_fields.push(f.name.clone());
+                }
+            }
+        }
+
+        user_fields.sort();
+        user_fields.dedup();
+        cross_fields.sort();
+        cross_fields.dedup();
+
+        if !user_fields.is_empty() && !cross_fields.is_empty() {
+            leakage_candidates.push(format!(
+                "{} (user-scoped: {}; cross-domain: {})",
+                type_name,
+                user_fields.join(", "),
+                cross_fields.join(", ")
+            ));
+        }
+    }
+
+    if !leakage_candidates.is_empty() {
+        findings.push(Finding {
+            id: "GQL-016",
+            severity: Severity::Medium,
+            title: "Cross-Object Field Leakage Heuristic",
+            description: format!(
+                "{} object type(s) combine user-ownership fields with cross-domain/private resource fields, which can indicate over-broad object exposure.",
+                leakage_candidates.len()
+            ),
+            affected: leakage_candidates.into_iter().take(25).collect(),
+            remediation: "Split multi-domain objects into least-privilege response types and enforce field-level authorization per ownership domain before serialization.",
+            references: vec!["OWASP API3: Excessive Data Exposure", "OWASP API1: Broken Object Level Authorization"],
+            confidence: Confidence::Possible,
+                evidence_level: EvidenceLevel::Inferred,
+            poc: None,
         });
     }
 

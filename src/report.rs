@@ -2,13 +2,21 @@ use colored::Colorize;
 use std::fs;
 use std::path::PathBuf;
 
-use crate::types::{Finding, ReportMeta, SchemaStats, Severity, INTROSPECTION_QUERY};
+use crate::types::{Confidence, Finding, ReportMeta, SchemaStats, Severity, INTROSPECTION_QUERY};
 
 fn severity_colored(s: &Severity) -> colored::ColoredString {
     match s {
         Severity::High => format!("[{}]", s).red().bold(),
         Severity::Medium => format!("[{}]", s).yellow().bold(),
         Severity::Low => format!("[{}]", s).cyan().bold(),
+    }
+}
+
+fn confidence_label(c: &Confidence) -> &'static str {
+    match c {
+        Confidence::Theoretical => "[THEORETICAL]",
+        Confidence::Possible => "[POSSIBLE]",
+        Confidence::Confirmed => "[CONFIRMED]",
     }
 }
 
@@ -30,6 +38,44 @@ fn wrap(s: &str, width: usize) -> Vec<String> {
         lines.push(current);
     }
     lines
+}
+
+fn print_limited_affected_text(affected: &[String], max_affected: usize) {
+    let shown = if max_affected == 0 {
+        affected.len()
+    } else {
+        affected.len().min(max_affected)
+    };
+
+    for a in affected.iter().take(shown) {
+        println!("         {} {}", "·".bright_black(), a.bright_cyan());
+    }
+
+    let remaining = affected.len().saturating_sub(shown);
+    if remaining > 0 {
+        println!(
+            "         {} {}",
+            "·".bright_black(),
+            format!("... and {} more (use --max-affected 0 to show all)", remaining).bright_black()
+        );
+    }
+}
+
+fn print_limited_affected_markdown(affected: &[String], max_affected: usize) {
+    let shown = if max_affected == 0 {
+        affected.len()
+    } else {
+        affected.len().min(max_affected)
+    };
+
+    for a in affected.iter().take(shown) {
+        println!("- {}", a);
+    }
+
+    let remaining = affected.len().saturating_sub(shown);
+    if remaining > 0 {
+        println!("- ... and {} more (use --max-affected 0 to show all)", remaining);
+    }
 }
 
 pub fn query_reference_for_finding(f: &Finding) -> Option<String> {
@@ -66,7 +112,13 @@ fn print_auth_discovery(meta: &ReportMeta) {
     }
 }
 
-pub fn print_text_report(stats: &SchemaStats, findings: &[Finding], meta: &ReportMeta) {
+pub fn print_text_report(
+    stats: &SchemaStats,
+    findings: &[Finding],
+    meta: &ReportMeta,
+    max_affected: usize,
+    verbose: bool,
+) {
     println!();
     println!("{}", "═".repeat(70).bright_black());
     println!(
@@ -134,9 +186,10 @@ pub fn print_text_report(stats: &SchemaStats, findings: &[Finding], meta: &Repor
 
     for (i, f) in findings.iter().enumerate() {
         println!(
-            "  {} {} {}",
+            "  {} {} {} {}",
             format!("({:02})", i + 1).bright_black(),
             severity_colored(&f.severity),
+            confidence_label(&f.confidence).bright_magenta(),
             f.title.bold().white()
         );
         println!("       ID : {}", f.id.bright_black());
@@ -155,9 +208,7 @@ pub fn print_text_report(stats: &SchemaStats, findings: &[Finding], meta: &Repor
 
         if !f.affected.is_empty() {
             println!("       {}", "Affected:".bright_black());
-            for a in &f.affected {
-                println!("         {} {}", "·".bright_black(), a.bright_cyan());
-            }
+            print_limited_affected_text(&f.affected, max_affected);
             println!();
         }
 
@@ -182,6 +233,16 @@ pub fn print_text_report(stats: &SchemaStats, findings: &[Finding], meta: &Repor
             }
         }
 
+        if verbose {
+            if let Some(poc) = &f.poc {
+                println!();
+                println!("       {}", "PoC:".bright_black());
+                for line in poc.lines() {
+                    println!("       {}", line.bright_white());
+                }
+            }
+        }
+
         println!("{}", "  ─".repeat(35).bright_black());
         println!();
     }
@@ -199,7 +260,9 @@ pub fn print_json_report(stats: &SchemaStats, findings: &[Finding], meta: &Repor
                 "affected": f.affected,
                 "remediation": f.remediation,
                 "references": f.references,
+                "confidence": f.confidence,
                 "evidence_level": f.evidence_level,
+                "poc": f.poc,
                 "query_reference": query_reference_for_finding(f),
             })
         })
@@ -275,11 +338,12 @@ pub fn write_html_report(
         };
 
         items.push_str(&format!(
-            "<article class=\"card {}\"><h3>[{}] {} <span class=\"id\">{}</span></h3><p><strong>Evidence:</strong> {}</p><p>{}</p><h4>Affected</h4><ul>{}</ul><h4>Remediation</h4><p>{}</p><h4>References</h4><ul>{}</ul>{}</article>",
+            "<article class=\"card {}\"><h3>[{}] {} <span class=\"id\">{} {}</span></h3><p><strong>Evidence:</strong> {}</p><p>{}</p><h4>Affected</h4><ul>{}</ul><h4>Remediation</h4><p>{}</p><h4>References</h4><ul>{}</ul>{}</article>",
             severity_class,
             escape_html(&f.severity.to_string()),
             escape_html(f.title),
             escape_html(f.id),
+            escape_html(confidence_label(&f.confidence)),
             evidence_label,
             escape_html(&f.description),
             affected,
@@ -328,4 +392,85 @@ pub fn write_html_report(
     );
 
     fs::write(path, html).map_err(|e| format!("Failed to write HTML report to {:?}: {}", path, e))
+}
+
+pub fn print_markdown_report(
+    stats: &SchemaStats,
+    findings: &[Finding],
+    meta: &ReportMeta,
+    max_affected: usize,
+) {
+    println!("# GraphQL Security Analyzer Report\n");
+    println!("- Source: {}", meta.source);
+    println!("- Mode: {}", if meta.offline { "offline" } else { "live" });
+    println!("- Findings: {}\n", findings.len());
+
+    println!("## Schema Overview\n");
+    println!("- Total types: {}", stats.total_types);
+    println!("- Queries: {}", stats.queries);
+    println!("- Mutations: {}", stats.mutations);
+    println!("- Subscriptions: {}", stats.subscriptions);
+    println!("- Total fields: {}", stats.total_fields);
+    println!("- Deprecated fields: {}\n", stats.deprecated_fields);
+
+    if findings.is_empty() {
+        println!("No findings detected.");
+        return;
+    }
+
+    for f in findings {
+        println!("## {} {}", f.id, f.title);
+        println!();
+        println!("- Severity: {}", f.severity);
+        println!("- Confidence: {}", f.confidence);
+        println!("- Evidence level: {}", f.evidence_level);
+        println!();
+        println!("{}", f.description);
+        println!();
+
+        if !f.affected.is_empty() {
+            println!("### Affected\n");
+            print_limited_affected_markdown(&f.affected, max_affected);
+            println!();
+        }
+
+        if let Some(poc) = markdown_poc_for_finding(f) {
+            println!("### PoC\n");
+            println!("```graphql");
+            println!("{}", poc);
+            println!("```\n");
+        } else if let Some(poc) = &f.poc {
+            println!("### PoC\n");
+            println!("```text");
+            println!("{}", poc);
+            println!("```\n");
+        }
+
+        println!("### Remediation\n");
+        println!("{}\n", f.remediation);
+    }
+}
+
+fn markdown_poc_for_finding(f: &Finding) -> Option<String> {
+    if f.id != "GQL-013" {
+        return None;
+    }
+
+    let first = f.affected.first()?;
+    let dot = first.find('.')?;
+    let open = first.find('(')?;
+    let close = first.find(')')?;
+    if close <= open {
+        return None;
+    }
+
+    let root = &first[..dot];
+    let operation = &first[dot + 1..open];
+    let arg = &first[open + 1..close];
+    let query_keyword = if root == "Mutation" { "mutation" } else { "query" };
+
+    Some(format!(
+        "# Probe: IDOR on {}.{}\n{} {{\n  {}({}: \"VICTIM_ID\") {{\n    __typename\n  }}\n}}",
+        root, operation, query_keyword, operation, arg
+    ))
 }

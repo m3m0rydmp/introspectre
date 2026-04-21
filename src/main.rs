@@ -1,5 +1,7 @@
 mod analysis;
+mod audit;
 mod cli;
+mod config;
 mod io_ops;
 mod report;
 mod types;
@@ -8,15 +10,87 @@ use clap::Parser;
 use colored::Colorize;
 
 use analysis::analyze;
+use audit::{print_audit_json_report, print_audit_markdown_report, print_audit_text_report, run_audit};
 use cli::{Cli, Commands, OutputFormat};
+use config::AppConfig;
 use io_ops::{
     discover_auth_requirements, fetch_introspection, load_schema_from_file, probe_graphql_endpoint,
 };
-use report::{print_json_report, print_text_report, write_html_report};
+use report::{print_json_report, print_markdown_report, print_text_report, write_html_report};
 use types::ReportMeta;
 
 fn main() {
     let cli = Cli::parse();
+    let mut app_config = if let Some(config_path) = &cli.config {
+        match AppConfig::load_from_path(config_path) {
+            Ok(cfg) => cfg,
+            Err(e) => {
+                eprintln!("{} {}", "  ✗ Error:".red().bold(), e);
+                std::process::exit(1);
+            }
+        }
+    } else {
+        AppConfig::default()
+    };
+
+    if let Err(e) = app_config.merge_wordlists(&cli.wordlist) {
+        eprintln!("{} {}", "  ✗ Error:".red().bold(), e);
+        std::process::exit(1);
+    }
+
+    if let Commands::Audit {
+        url,
+        headers,
+        timeout,
+        rate_limit_ms,
+    } = &cli.command
+    {
+        let schema = match fetch_introspection(
+            url,
+            headers,
+            *timeout,
+            *rate_limit_ms,
+            cli.token.as_deref(),
+        ) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("{} {}", "  ✗ Error:".red().bold(), e);
+                std::process::exit(2);
+            }
+        };
+
+        let (passive_findings, _stats) = analyze(&schema, &app_config.patterns);
+        let report = match run_audit(
+            &schema,
+            url,
+            headers,
+            *timeout,
+            *rate_limit_ms,
+            &app_config,
+            &passive_findings,
+        ) {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("{} {}", "  ✗ Error:".red().bold(), e);
+                std::process::exit(2);
+            }
+        };
+
+        match cli.format {
+            OutputFormat::Text => print_audit_text_report(&report, cli.max_affected, cli.verbose),
+            OutputFormat::Json => print_audit_json_report(&report),
+            OutputFormat::Markdown => print_audit_markdown_report(&report, cli.max_affected),
+        }
+
+        if report
+            .confirmed
+            .iter()
+            .any(|f| f.severity == crate::types::Severity::High)
+        {
+            std::process::exit(1);
+        }
+        std::process::exit(0);
+    }
 
     let mut offline = false;
     let mut static_only = true;
@@ -171,9 +245,10 @@ fn main() {
                 }
             }
         }
+        Commands::Audit { .. } => unreachable!("audit is handled in early-return block"),
     };
 
-    let (mut findings, stats) = analyze(&schema);
+    let (mut findings, stats) = analyze(&schema, &app_config.patterns);
 
     if let Some(min) = &cli.min_severity {
         findings.retain(|f| &f.severity >= min);
@@ -190,8 +265,11 @@ fn main() {
     };
 
     match cli.format {
-        OutputFormat::Text => print_text_report(&stats, &findings, &meta),
+        OutputFormat::Text => {
+            print_text_report(&stats, &findings, &meta, cli.max_affected, cli.verbose)
+        }
         OutputFormat::Json => print_json_report(&stats, &findings, &meta),
+        OutputFormat::Markdown => print_markdown_report(&stats, &findings, &meta, cli.max_affected),
     }
 
     if cli.html_report {

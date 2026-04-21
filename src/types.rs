@@ -64,6 +64,7 @@ pub struct GqlDirective {
 pub struct GqlType {
     pub kind: Option<String>,
     pub name: Option<String>,
+    #[allow(dead_code)]
     pub description: Option<String>,
     pub fields: Option<Vec<GqlField>>,
     pub input_fields: Option<Vec<GqlInputField>>,
@@ -92,6 +93,7 @@ pub struct GqlArg {
 pub struct GqlInputField {
     pub name: String,
     #[serde(rename = "type")]
+    #[allow(dead_code)]
     pub field_type: Option<GqlTypeRef>,
 }
 
@@ -99,6 +101,7 @@ pub struct GqlInputField {
 #[serde(rename_all = "camelCase")]
 pub struct GqlEnumValue {
     pub name: String,
+    #[allow(dead_code)]
     pub is_deprecated: Option<bool>,
 }
 
@@ -148,6 +151,7 @@ impl std::fmt::Display for Severity {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub enum EvidenceLevel {
     #[serde(rename = "executed")]
@@ -168,6 +172,27 @@ impl std::fmt::Display for EvidenceLevel {
     }
 }
 
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub enum Confidence {
+    #[serde(rename = "theoretical")]
+    Theoretical,
+    #[serde(rename = "possible")]
+    Possible,
+    #[serde(rename = "confirmed")]
+    Confirmed,
+}
+
+impl std::fmt::Display for Confidence {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Confidence::Theoretical => write!(f, "THEORETICAL"),
+            Confidence::Possible => write!(f, "POSSIBLE"),
+            Confidence::Confirmed => write!(f, "CONFIRMED"),
+        }
+    }
+}
+
 #[derive(Debug, Serialize)]
 pub struct Finding {
     pub id: &'static str,
@@ -177,7 +202,9 @@ pub struct Finding {
     pub affected: Vec<String>,
     pub remediation: &'static str,
     pub references: Vec<&'static str>,
+    pub confidence: Confidence,
     pub evidence_level: EvidenceLevel,
+    pub poc: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
