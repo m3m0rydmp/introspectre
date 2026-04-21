@@ -1,5 +1,5 @@
 [package]
-name = "gql-analyzer"
+name = "introspectre"
 version = "0.1.0"
 edition = "2021"
 

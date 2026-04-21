@@ -5,7 +5,7 @@ use crate::types::Severity;
 
 #[derive(Parser)]
 #[command(
-    name = "gql-analyzer",
+    name = "introspectre",
     about = "GraphQL Security Analyzer — introspection-based vulnerability scanner",
     version,
     long_about = "Analyzes GraphQL schemas (from a live endpoint or a JSON file) and reports security issues: exposed sensitive fields, missing auth directives, circular type references, large attack surfaces, deprecated fields, and more."
@@ -43,7 +43,7 @@ pub struct Cli {
     pub html_report: bool,
 
     /// HTML report output path
-    #[arg(long, default_value = "gql-analyzer-report.html", global = true)]
+    #[arg(long, default_value = "introspectre-report.html", global = true)]
     pub html_path: PathBuf,
 
     /// Show verbose details in text output (includes PoC blocks when available)

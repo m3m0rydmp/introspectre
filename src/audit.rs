@@ -452,7 +452,7 @@ fn post_graphql(
     let mut req = client
         .post(url)
         .header("Content-Type", "application/json")
-        .header("User-Agent", "GQL-Analyzer/1.0 (Active-Audit-Probe)");
+        .header("User-Agent", "Introspectre/1.0 (Active-Audit-Probe)");
 
     for (k, v) in headers {
         req = req.header(k, v);

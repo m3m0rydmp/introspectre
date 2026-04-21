@@ -1,4 +1,4 @@
-# gql-analyzer
+# introspectre
 
 A GraphQL security analyzer that identifies vulnerabilities in GraphQL APIs through schema introspection and active probing.
 
@@ -29,17 +29,21 @@ A GraphQL security analyzer that identifies vulnerabilities in GraphQL APIs thro
 ### Requirements
 - Rust 1.56 or later (install from [rustup.rs](https://rustup.rs/))
 
-### Build from Source
+The build and install workflow below applies to both Linux and Windows.
+
+### Build from Source (Linux and Windows)
 
 ```bash
-git clone <repository>
+git clone https://github.com/m3m0rydmp/graphql-tester.git
 cd graphql-tester
 cargo build --release
 ```
 
-The compiled binary will be at `target/release/gql-analyzer`.
+Compiled binary paths:
+- Linux: `target/release/introspectre`
+- Windows: `target/release/introspectre.exe`
 
-### Install Binary
+### Install Binary (Linux and Windows)
 
 ```bash
 cargo install --path .
@@ -47,30 +51,41 @@ cargo install --path .
 
 This installs the binary to your `~/.cargo/bin/` directory. Ensure this directory is in your `$PATH`.
 
+On Windows, the command is the same. Rust installs binaries to `%USERPROFILE%\\.cargo\\bin`; ensure that directory is in your `PATH`.
+
+### Windows Quick Start (PowerShell)
+
+```powershell
+git clone https://github.com/m3m0rydmp/graphql-tester.git
+cd graphql-tester
+cargo install --path .
+introspectre --help
+```
+
 ## Quick Start
 
 ### Analyze a Live Endpoint
 
 ```bash
-gql-analyzer scan https://api.example.com/graphql
+introspectre scan https://api.example.com/graphql
 ```
 
 ### Analyze with Authentication
 
 ```bash
-gql-analyzer scan https://api.example.com/graphql --token "Bearer YOUR_TOKEN"
+introspectre scan https://api.example.com/graphql --token "Bearer YOUR_TOKEN"
 ```
 
 ### Run Active Audit
 
 ```bash
-gql-analyzer audit https://api.example.com/graphql
+introspectre audit https://api.example.com/graphql
 ```
 
 ### Analyze from JSON File
 
 ```bash
-gql-analyzer file schema.json
+introspectre file schema.json
 ```
 
 ## Usage
@@ -84,7 +99,7 @@ gql-analyzer file schema.json
 | `--max-affected` | NUMBER | 30 | Max affected entries shown per finding (0 = no limit) |
 | `--min-severity` | low\|medium\|high | None | Only show findings at or above this level |
 | `--html-report` | BOOL | false | Generate HTML report |
-| `--html-path` | PATH | gql-analyzer-report.html | HTML report output location |
+| `--html-path` | PATH | introspectre-report.html | HTML report output location |
 | `--verbose` | BOOL | false | Show PoC blocks in text output |
 | `--token` | STRING | None | Bearer token for authenticated requests |
 
@@ -93,7 +108,7 @@ gql-analyzer file schema.json
 Fetch schema via introspection and analyze for vulnerabilities.
 
 ```bash
-gql-analyzer scan <URL> [OPTIONS]
+introspectre scan <URL> [OPTIONS]
 ```
 
 | Option | Type | Default | Description |
@@ -111,7 +126,7 @@ gql-analyzer scan <URL> [OPTIONS]
 Run active security probes against a live endpoint using schema-derived candidates.
 
 ```bash
-gql-analyzer audit <URL> [OPTIONS]
+introspectre audit <URL> [OPTIONS]
 ```
 
 | Option | Type | Default | Description |
@@ -125,7 +140,7 @@ gql-analyzer audit <URL> [OPTIONS]
 Analyze a previously saved introspection JSON file.
 
 ```bash
-gql-analyzer file <PATH>
+introspectre file <PATH>
 ```
 
 ## Examples
@@ -133,7 +148,7 @@ gql-analyzer file <PATH>
 ### Scan with custom headers
 
 ```bash
-gql-analyzer scan https://api.example.com/graphql \
+introspectre scan https://api.example.com/graphql \
   --header "Authorization=Bearer token123" \
   --header "X-API-Key=secret"
 ```
@@ -141,13 +156,13 @@ gql-analyzer scan https://api.example.com/graphql \
 ### Generate JSON report
 
 ```bash
-gql-analyzer scan https://api.example.com/graphql --format json > report.json
+introspectre scan https://api.example.com/graphql --format json > report.json
 ```
 
 ### Create HTML report
 
 ```bash
-gql-analyzer scan https://api.example.com/graphql \
+introspectre scan https://api.example.com/graphql \
   --html-report \
   --html-path security-report.html
 ```
@@ -155,18 +170,18 @@ gql-analyzer scan https://api.example.com/graphql \
 ### Run audit with verbose PoC output
 
 ```bash
-gql-analyzer audit https://api.example.com/graphql --verbose
+introspectre audit https://api.example.com/graphql --verbose
 ```
 
 ### Filter by severity level
 
 ```bash
-gql-analyzer scan https://api.example.com/graphql --min-severity high
+introspectre scan https://api.example.com/graphql --min-severity high
 ```
 
 ## Configuration
 
-Create a `config.toml` file to customize analysis patterns:
+The `config.toml` file will customize you analysis patterns. Either modify the existing file, or create your own:
 
 ```toml
 # Sensitive field patterns
@@ -226,14 +241,6 @@ Remediation: Implement field-level authorization directives
   ]
 }
 ```
-
-## Architecture
-
-The tool operates in two phases:
-
-1. **Schema Discovery**: Executes GraphQL introspection query to obtain full schema
-2. **Analysis**: Applies pattern-based rules to identify security issues
-3. **Active Auditing**: (Optional) Runs live endpoint probes for exploit confirmation
 
 ## Development
 

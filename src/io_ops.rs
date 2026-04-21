@@ -52,7 +52,7 @@ pub fn fetch_introspection(
     let mut req = client
         .post(url)
         .header("Content-Type", "application/json")
-        .header("User-Agent", "GQL-Analyzer/1.0 (Security-Audit-Only)");
+        .header("User-Agent", "Introspectre/1.0 (Security-Audit-Only)");
 
     for (k, v) in parse_extra_headers(extra_headers) {
         req = req.header(k, v);
@@ -120,7 +120,7 @@ pub fn probe_graphql_endpoint(
     let mut req = client
         .post(url)
         .header("Content-Type", "application/json")
-        .header("User-Agent", "GQL-Analyzer/1.0 (Security-Audit-Only; Endpoint-Probe)");
+        .header("User-Agent", "Introspectre/1.0 (Security-Audit-Only; Endpoint-Probe)");
 
     for (k, v) in parse_extra_headers(extra_headers) {
         req = req.header(k, v);
@@ -357,7 +357,7 @@ pub fn discover_auth_requirements(
         let mut req = client
             .post(url)
             .header("Content-Type", "application/json")
-            .header("User-Agent", "GQL-Analyzer/1.0 (Security-Audit-Only; Auth-Discovery)");
+            .header("User-Agent", "Introspectre/1.0 (Security-Audit-Only; Auth-Discovery)");
         for (k, v) in parse_extra_headers(extra_headers) {
             req = req.header(k, v);
         }
