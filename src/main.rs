@@ -43,6 +43,8 @@ fn main() {
         headers,
         timeout,
         rate_limit_ms,
+        batch_probes,
+        batch_size,
     } = &cli.command
     {
         let schema = match fetch_introspection(
@@ -68,6 +70,8 @@ fn main() {
             *rate_limit_ms,
             &app_config,
             &passive_findings,
+            *batch_probes,
+            *batch_size,
         ) {
             Ok(r) => r,
             Err(e) => {

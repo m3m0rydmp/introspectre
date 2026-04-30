@@ -87,11 +87,20 @@ pub fn run_audit(
     rate_limit_ms: u64,
     config: &AppConfig,
     passive_findings: &[Finding],
+    batch_probes: bool,
+    batch_size: u32,
 ) -> Result<AuditReport, String> {
     let client = build_client(timeout_secs)?;
     let mut confirmed: Vec<AuditFinding> = Vec::new();
     let mut unconfirmed: Vec<AuditFinding> = Vec::new();
     let mut warnings: Vec<String> = Vec::new();
+
+    if batch_probes {
+        warnings.push(
+            "Batch probing enabled: multiple safe probe operations will be combined into single requests."
+                .to_string(),
+        );
+    }
 
     // Probe D: endpoint confirmation via __typename (must happen before other active probes).
     let typename_resp = post_graphql(
@@ -134,6 +143,8 @@ pub fn run_audit(
         &client,
         extra_headers,
         rate_limit_ms,
+        batch_probes,
+        batch_size,
         &mut confirmed,
         &mut unconfirmed,
     )?;
@@ -145,6 +156,8 @@ pub fn run_audit(
             &client,
             extra_headers,
             rate_limit_ms,
+            batch_probes,
+            batch_size,
             &mut confirmed,
             &mut unconfirmed,
         )?;
@@ -482,6 +495,76 @@ fn post_graphql(
     })
 }
 
+fn post_batched_graphql(
+    client: &Client,
+    url: &str,
+    headers: &[(String, String)],
+    queries: &[&str],
+    rate_limit_ms: u64,
+) -> Result<Vec<ProbeResponse>, String> {
+    if rate_limit_ms > 0 {
+        thread::sleep(Duration::from_millis(rate_limit_ms));
+    }
+
+    let mut req = client
+        .post(url)
+        .header("Content-Type", "application/json")
+        .header("User-Agent", "Introspectre/1.0 (Active-Audit-Probe-Batched)");
+
+    for (k, v) in headers {
+        req = req.header(k, v);
+    }
+
+    // Construct array of query objects for batch
+    let operations: Vec<serde_json::Value> = queries
+        .iter()
+        .map(|q| serde_json::json!({ "query": q }))
+        .collect();
+
+    let body = serde_json::json!(operations);
+    let started = Instant::now();
+    let resp = req.json(&body).send().map_err(|e| e.to_string())?;
+    let elapsed_ms = started.elapsed().as_millis();
+    let status = resp.status().as_u16();
+    let raw_text = resp.text().unwrap_or_default();
+
+    // Parse response array
+    let parsed: Result<Vec<serde_json::Value>, _> = serde_json::from_str(&raw_text);
+    let responses = match parsed {
+        Ok(arr) => arr,
+        Err(_) => {
+            // Fallback: treat as single response
+            return match serde_json::from_str::<serde_json::Value>(&raw_text) {
+                Ok(single) => Ok(vec![ProbeResponse {
+                    status,
+                    elapsed_ms,
+                    data: single.get("data").cloned(),
+                    errors_text: single
+                        .get("errors")
+                        .map(|v| v.to_string())
+                        .unwrap_or_default(),
+                    raw_text,
+                }]),
+                Err(_) => Err("Failed to parse batched response".to_string()),
+            };
+        }
+    };
+
+    Ok(responses
+        .into_iter()
+        .map(|v| ProbeResponse {
+            status,
+            elapsed_ms,
+            data: v.get("data").cloned(),
+            errors_text: v
+                .get("errors")
+                .map(|e| e.to_string())
+                .unwrap_or_default(),
+            raw_text: v.to_string(),
+        })
+        .collect())
+}
+
 fn extract_typename(data: &Option<Value>) -> Option<String> {
     data.as_ref()
         .and_then(|d| d.get("__typename"))
@@ -575,6 +658,8 @@ fn probe_verbose_error_disclosure(
     client: &Client,
     extra_headers: &[String],
     rate_limit_ms: u64,
+    batch_probes: bool,
+    batch_size: u32,
     confirmed: &mut Vec<AuditFinding>,
     unconfirmed: &mut Vec<AuditFinding>,
 ) -> Result<(), String> {
@@ -752,6 +837,8 @@ fn probe_unauth_access(
     client: &Client,
     extra_headers: &[String],
     rate_limit_ms: u64,
+    batch_probes: bool,
+    batch_size: u32,
     confirmed: &mut Vec<AuditFinding>,
     unconfirmed: &mut Vec<AuditFinding>,
 ) -> Result<(), String> {
@@ -774,33 +861,95 @@ fn probe_unauth_access(
     }
 
     let headers = effective_headers(extra_headers, None, false);
-    for (op, root, field) in targets {
-        if has_required_args(field) {
-            skipped_required_args += 1;
-            continue;
+
+    if batch_probes && batch_size > 0 {
+        // Batched mode: collect and send queries in batches
+        let batch_size_usize = batch_size as usize;
+        let mut query_batch: Vec<(String, &str, &str, &GqlField)> = Vec::new();
+
+        for (op, root, field) in targets {
+            if has_required_args(field) {
+                skipped_required_args += 1;
+                continue;
+            }
+
+            attempted += 1;
+            let query = build_operation_query(schema, op, field, &HashMap::new(), false);
+            query_batch.push((query, op, root, field));
+
+            if query_batch.len() >= batch_size_usize {
+                // Send batch
+                let batch_queries: Vec<&str> = query_batch.iter().map(|(q, _, _, _)| q.as_str()).collect();
+                let responses = post_batched_graphql(client, url, &headers, &batch_queries, rate_limit_ms)?;
+
+                for (idx, (query, op, root, field)) in query_batch.iter().enumerate() {
+                    let label = format!("{}.{}", root, field.name);
+                    if let Some(resp) = responses.get(idx) {
+                        if field_non_null_data(&resp.data, &field.name).is_some() {
+                            confirmed_access.push(label);
+                        } else if resp.status == 401 || resp.status == 403 || is_auth_error(&resp.errors_text) {
+                            auth_blocked += 1;
+                        } else if is_validation_error(&resp.errors_text) {
+                            validation_failures += 1;
+                        } else {
+                            inconclusive.push(label);
+                        }
+                    }
+                }
+                query_batch.clear();
+            }
         }
 
-        attempted += 1;
-        let query = build_operation_query(schema, op, field, &HashMap::new(), false);
-        let resp = post_graphql(client, url, &headers, &query, rate_limit_ms)?;
-        let label = format!("{}.{}", root, field.name);
+        // Send final partial batch
+        if !query_batch.is_empty() {
+            let batch_queries: Vec<&str> = query_batch.iter().map(|(q, _, _, _)| q.as_str()).collect();
+            let responses = post_batched_graphql(client, url, &headers, &batch_queries, rate_limit_ms)?;
 
-        if field_non_null_data(&resp.data, &field.name).is_some() {
-            confirmed_access.push(label);
-            continue;
+            for (idx, (query, op, root, field)) in query_batch.iter().enumerate() {
+                let label = format!("{}.{}", root, field.name);
+                if let Some(resp) = responses.get(idx) {
+                    if field_non_null_data(&resp.data, &field.name).is_some() {
+                        confirmed_access.push(label);
+                    } else if resp.status == 401 || resp.status == 403 || is_auth_error(&resp.errors_text) {
+                        auth_blocked += 1;
+                    } else if is_validation_error(&resp.errors_text) {
+                        validation_failures += 1;
+                    } else {
+                        inconclusive.push(label);
+                    }
+                }
+            }
         }
+    } else {
+        // Original single-query mode
+        for (op, root, field) in targets {
+            if has_required_args(field) {
+                skipped_required_args += 1;
+                continue;
+            }
 
-        if resp.status == 401 || resp.status == 403 || is_auth_error(&resp.errors_text) {
-            auth_blocked += 1;
-            continue;
+            attempted += 1;
+            let query = build_operation_query(schema, op, field, &HashMap::new(), false);
+            let resp = post_graphql(client, url, &headers, &query, rate_limit_ms)?;
+            let label = format!("{}.{}", root, field.name);
+
+            if field_non_null_data(&resp.data, &field.name).is_some() {
+                confirmed_access.push(label);
+                continue;
+            }
+
+            if resp.status == 401 || resp.status == 403 || is_auth_error(&resp.errors_text) {
+                auth_blocked += 1;
+                continue;
+            }
+
+            if is_validation_error(&resp.errors_text) {
+                validation_failures += 1;
+                continue;
+            }
+
+            inconclusive.push(label);
         }
-
-        if is_validation_error(&resp.errors_text) {
-            validation_failures += 1;
-            continue;
-        }
-
-        inconclusive.push(label);
     }
 
     if !confirmed_access.is_empty() {

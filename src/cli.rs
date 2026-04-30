@@ -105,6 +105,14 @@ pub enum Commands {
         /// Client-side delay before issuing requests (milliseconds)
         #[arg(long, default_value_t = 750)]
         rate_limit_ms: u64,
+
+        /// Enable batching of safe probes (verbose disclosure, unauthenticated access) into single requests
+        #[arg(long, default_value_t = false)]
+        batch_probes: bool,
+
+        /// Maximum number of operations per batched request (only when --batch-probes is enabled)
+        #[arg(long, default_value_t = 5)]
+        batch_size: u32,
     },
 
     /// Analyze a schema already saved to a JSON file
