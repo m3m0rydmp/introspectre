@@ -1,79 +1,79 @@
-# introspectre
+# Introspectre
 
-`introspectre` is a powerful security analysis and auditing tool for GraphQL schemas. It combines static schema analysis with active probing to identify vulnerabilities like IDOR, Mass Assignment, Sensitive Data Exposure, and Denial of Service (DoS) risks.
+Introspectre is a comprehensive security analysis and auditing utility designed for GraphQL schemas. The tool integrates static schema analysis with active probing to detect vulnerabilities such as Insecure Direct Object References (IDOR), Mass Assignment, Sensitive Data Exposure, and various Denial of Service (DoS) attack vectors.
 
-## 🚀 Installation & Setup
+## Installation and Setup
 
-### 1. Install Rust
-This tool is built with Rust. If you don't have it installed:
-*   **Linux/macOS:** `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
-*   **Windows:** Download and run [rustup-init.exe](https://rustup.rs/)
+### 1. Requirements
+Introspectre is developed in Rust. The Rust toolchain must be installed on the host system:
+*   **Unix-based systems (Linux/macOS):** `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
+*   **Windows:** Download and execute the [rustup-init.exe](https://rustup.rs/) installer.
 
-### 2. Build the tool
-Clone the repository and build the binary:
+### 2. Building from Source
+Clone the repository and compile the project using Cargo:
 ```bash
 git clone https://github.com/m3m0rydmp/introspectre.git
 cd introspectre
 cargo build --release
 ```
-The binary will be located at `./target/release/introspectre`.
+The compiled binary will be available at `./target/release/introspectre`.
 
-### Platform Specifics
-*   **Linux:** Ensure you have `pkg-config` and `openssl-devel` (or `libssl-dev`) installed if building from source.
-*   **Windows:** Requires Visual Studio Build Tools with the C++ workload installed.
+### Platform Dependencies
+*   **Linux:** Systems require `pkg-config` and OpenSSL development headers (e.g., `libssl-dev` or `openssl-devel`).
+*   **Windows:** Requires Visual Studio Build Tools with the "Desktop development with C++" workload.
 
-## 🛠 Commands
+## CLI Usage and Commands
 
 ```text
 Usage: introspectre [OPTIONS] <COMMAND>
 
 Commands:
-  scan   Fetch schema via live introspection query and perform static analysis
-  audit  Active probing audit flow using schema-derived candidates
-  file   Analyze a schema already saved to a JSON file
-  help   Print this message or the help of the given subcommand(s)
+  scan   Retrieve schema via live introspection and execute static analysis
+  audit  Execute active probing based on schema-derived candidates
+  file   Analyze a local introspection JSON file
+  help   Display help information
 ```
 
-### Scan Options (`introspectre scan --help`)
-*   `--discover-auth`: Discover which root fields are protected vs public using unauthenticated knock probes.
-*   `--static-only`: Avoid active exploit payload probes (recommended for initial assessment).
-*   `--probe-first`: Run a lightweight GraphQL endpoint probe before introspection.
-*   `--rate-limit-ms <MS>`: Client-side delay before issuing requests (default: 750ms).
+### Scan Command Parameters
+*   `--discover-auth`: Identifies protected and public root fields through unauthenticated probes.
+*   `--static-only`: Disables active payload probing; recommended for non-intrusive assessments.
+*   `--probe-first`: Validates the GraphQL endpoint state prior to introspection.
+*   `--rate-limit-ms <MS>`: Specifies the client-side delay between requests (default: 750ms).
 
-### Audit Options (`introspectre audit --help`)
-*   `--idor-payloads <IDS>`: Custom candidate IDs for IDOR probing.
-*   `--rate-limit-ms <MS>`: Important for avoiding WAF triggers during active probing.
+### Audit Command Parameters
+*   `--idor-payloads <IDS>`: Configures specific identifier values for IDOR testing.
+*   `--rate-limit-ms <MS>`: Adjusts request frequency to mitigate potential rate-limiting or WAF interference.
 
-## Use Cases
+## Assessment Strategies
 
-### 🟢 Safe / Passive Analysis
-Perfect for quick assessments or CI/CD pipelines where you don't want to trigger WAFs or affect server state.
+### Passive Analysis
+Suitable for environments where network traffic or server state changes must be minimized.
 ```bash
-# Analyze a schema file locally without making any network requests
+# Analyze a local schema file
 introspectre file schema.json
 
-# Perform introspection and static analysis on a live endpoint (read-only)
+# Perform read-only static analysis on a live endpoint
 introspectre scan https://api.example.com/graphql --static-only
 ```
 
-### 🟡 Informed / Active Discovery
-Probes the endpoint to understand authentication guards and endpoint behavior.
+### Discovery and Behavioral Probing
+Evaluates authentication mechanisms and endpoint resilience.
 ```bash
-# Discover which fields require authentication and check for basic DoS vectors
+# Map authentication requirements and validate endpoint behavior
 introspectre scan https://api.example.com/graphql --discover-auth --probe-first
 ```
 
-### 🔴 Destructive / Active Auditing (Use with Caution)
-Performs active probing using generated payloads. This may trigger alerts, modify data (if mutations are probed), or cause high load.
+### Active Auditing
+Performs intrusive testing using generated payloads. This mode should be used with caution as it may generate security alerts or impact system performance.
 ```bash
-# Actively probe for IDOR, SSRF, and complexity-based DoS vulnerabilities
+# Execute active probes for IDOR, SSRF, and complexity-based DoS
 introspectre audit https://api.example.com/graphql --rate-limit-ms 1000 --idor-payloads "1,100,2024"
 ```
 
 ## Configuration
-Use a `config.toml` to customize sensitivity patterns and wordlists:
+Security patterns and wordlists can be customized via a `config.toml` file:
 ```bash
 introspectre --config custom_config.toml scan <URL>
 ```
 
-For more technical details, see [ARCHITECTURE.md](./ARCHITECTURE.md).
+Refer to [ARCHITECTURE.md](./ARCHITECTURE.md) for detailed technical specifications.
