@@ -2,11 +2,13 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use reqwest::blocking::Client;
+use futures::stream::{futures_unordered::FuturesUnordered, StreamExt};
+use reqwest::Client;
 use serde::Deserialize;
 
-use crate::analysis::{fields_for_type, unwrap_type_name};
-use crate::types::{AuthDiscoveryResult, GqlError, GqlField, GqlSchema, IntrospectionResponse, INTROSPECTION_QUERY};
+use crate::types::{
+    AuthDiscoveryResult, GqlError, GqlField, GqlSchema, IntrospectionResponse, INTROSPECTION_QUERY,
+};
 
 #[derive(Debug, Clone)]
 pub struct EndpointProbeResult {
@@ -18,7 +20,7 @@ pub struct EndpointProbeResult {
 }
 
 fn build_client(timeout_secs: u64) -> Result<Client, String> {
-    reqwest::blocking::Client::builder()
+    reqwest::Client::builder()
         .timeout(Duration::from_secs(timeout_secs))
         .build()
         .map_err(|e| e.to_string())
@@ -40,7 +42,7 @@ fn parse_extra_headers(extra_headers: &[String]) -> Vec<(String, String)> {
         .collect()
 }
 
-pub fn fetch_introspection(
+pub async fn fetch_introspection(
     url: &str,
     extra_headers: &[String],
     timeout_secs: u64,
@@ -63,12 +65,15 @@ pub fn fetch_introspection(
     }
 
     if rate_limit_ms > 0 {
-        std::thread::sleep(Duration::from_millis(rate_limit_ms));
+        tokio::time::sleep(Duration::from_millis(rate_limit_ms)).await;
     }
 
     let body = serde_json::json!({ "query": INTROSPECTION_QUERY });
-    let resp = req.json(&body).send().map_err(|e| {
-        format!("Request failed: {}. Check the URL, network access, and any required auth headers.", e)
+    let resp = req.json(&body).send().await.map_err(|e| {
+        format!(
+            "Request failed: {}. Check the URL, network access, and any required auth headers.",
+            e
+        )
     })?;
 
     let status = resp.status();
@@ -78,6 +83,7 @@ pub fn fetch_introspection(
 
     let parsed: IntrospectionResponse = resp
         .json()
+        .await
         .map_err(|e| format!("Failed to parse response as JSON: {}", e))?;
 
     if let Some(errors) = parsed.errors {
@@ -102,13 +108,12 @@ pub fn fetch_introspection(
         return Err(format!("GraphQL errors: {}", all));
     }
 
-    parsed
-        .data
-        .map(|d| d.schema)
-        .ok_or_else(|| "Response contained no `data.__schema` field. Introspection may be disabled.".into())
+    parsed.data.map(|d| d.schema).ok_or_else(|| {
+        "Response contained no `data.__schema` field. Introspection may be disabled.".into()
+    })
 }
 
-pub fn probe_graphql_endpoint(
+pub async fn probe_graphql_endpoint(
     url: &str,
     extra_headers: &[String],
     timeout_secs: u64,
@@ -120,7 +125,10 @@ pub fn probe_graphql_endpoint(
     let mut req = client
         .post(url)
         .header("Content-Type", "application/json")
-        .header("User-Agent", "Introspectre/1.0 (Security-Audit-Only; Endpoint-Probe)");
+        .header(
+            "User-Agent",
+            "Introspectre/1.0 (Security-Audit-Only; Endpoint-Probe)",
+        );
 
     for (k, v) in parse_extra_headers(extra_headers) {
         req = req.header(k, v);
@@ -131,7 +139,7 @@ pub fn probe_graphql_endpoint(
     }
 
     if rate_limit_ms > 0 {
-        std::thread::sleep(Duration::from_millis(rate_limit_ms));
+        tokio::time::sleep(Duration::from_millis(rate_limit_ms)).await;
     }
 
     // Minimal knock that confirms GraphQL without requiring introspection.
@@ -139,6 +147,7 @@ pub fn probe_graphql_endpoint(
     let resp = req
         .json(&body)
         .send()
+        .await
         .map_err(|e| format!("Probe request failed: {}", e))?;
 
     let status = resp.status();
@@ -155,7 +164,7 @@ pub fn probe_graphql_endpoint(
         });
     }
 
-    let parsed: Result<ProbeResponse, _> = resp.json();
+    let parsed: Result<ProbeResponse, _> = resp.json().await;
     let parsed = match parsed {
         Ok(p) => p,
         Err(_) => {
@@ -195,7 +204,8 @@ pub fn probe_graphql_endpoint(
                 auth_likely_required: true,
                 content_type_or_json_issue: false,
                 http_status: status.as_u16(),
-                summary: "GraphQL confirmed, but auth is likely required for full access.".to_string(),
+                summary: "GraphQL confirmed, but auth is likely required for full access."
+                    .to_string(),
             });
         }
 
@@ -212,7 +222,8 @@ pub fn probe_graphql_endpoint(
                 auth_likely_required: false,
                 content_type_or_json_issue: false,
                 http_status: status.as_u16(),
-                summary: "Endpoint behaves like GraphQL (GraphQL-formatted errors observed).".to_string(),
+                summary: "Endpoint behaves like GraphQL (GraphQL-formatted errors observed)."
+                    .to_string(),
             });
         }
 
@@ -235,7 +246,8 @@ pub fn probe_graphql_endpoint(
 }
 
 pub fn load_schema_from_file(path: &PathBuf) -> Result<GqlSchema, String> {
-    let content = fs::read_to_string(path).map_err(|e| format!("Cannot read file {:?}: {}", path, e))?;
+    let content =
+        fs::read_to_string(path).map_err(|e| format!("Cannot read file {:?}: {}", path, e))?;
 
     let value: serde_json::Value =
         serde_json::from_str(&content).map_err(|e| format!("Invalid JSON: {}", e))?;
@@ -245,7 +257,9 @@ pub fn load_schema_from_file(path: &PathBuf) -> Result<GqlSchema, String> {
         .and_then(|d| d.get("__schema"))
         .or_else(|| value.get("__schema"))
         .or_else(|| value.get("schema"))
-        .ok_or("Could not find `__schema` key in JSON. Ensure this is a GraphQL introspection result.")?;
+        .ok_or(
+            "Could not find `__schema` key in JSON. Ensure this is a GraphQL introspection result.",
+        )?;
 
     serde_json::from_value(schema_val.clone()).map_err(|e| format!("Failed to parse schema: {}", e))
 }
@@ -257,28 +271,15 @@ struct ProbeResponse {
 }
 
 fn type_kind(schema: &GqlSchema, field: &GqlField) -> Option<String> {
-    let name = field.field_type.as_ref().and_then(unwrap_type_name)?;
+    let name = field
+        .field_type
+        .as_ref()
+        .and_then(|t| t.unwrap_type_name())?;
     schema
         .types
         .iter()
         .find(|t| t.name.as_deref() == Some(name.as_str()))
         .and_then(|t| t.kind.clone())
-}
-
-fn has_required_args(field: &GqlField) -> bool {
-    field
-        .args
-        .as_ref()
-        .map(|args| {
-            args.iter().any(|a| {
-                a.arg_type
-                    .as_ref()
-                    .and_then(|t| t.kind.as_deref())
-                    .map(|k| k == "NON_NULL")
-                    .unwrap_or(false)
-            })
-        })
-        .unwrap_or(false)
 }
 
 fn knock_query(schema: &GqlSchema, op: &str, field: &GqlField) -> String {
@@ -318,7 +319,7 @@ fn is_public_likely_error(msg: &str) -> bool {
     signals.iter().any(|s| m.contains(s))
 }
 
-pub fn discover_auth_requirements(
+pub async fn discover_auth_requirements(
     schema: &GqlSchema,
     url: &str,
     extra_headers: &[String],
@@ -328,100 +329,151 @@ pub fn discover_auth_requirements(
     let client = build_client(timeout_secs)?;
     let mut result = AuthDiscoveryResult::new();
 
-    let mut targets: Vec<(String, String, &GqlField)> = Vec::new();
+    let mut targets: Vec<(String, String, String)> = Vec::new();
     let query_name = schema.query_type.as_ref().map(|q| q.name.as_str());
     let mutation_name = schema.mutation_type.as_ref().map(|m| m.name.as_str());
 
-    for f in fields_for_type(schema, query_name) {
-        targets.push(("query".to_string(), "Query".to_string(), f));
+    for f in schema.fields_for_type(query_name) {
+        targets.push((
+            "query".to_string(),
+            "Query".to_string(),
+            knock_query(schema, "query", f),
+        ));
     }
-    for f in fields_for_type(schema, mutation_name) {
-        targets.push(("mutation".to_string(), "Mutation".to_string(), f));
+    for f in schema.fields_for_type(mutation_name) {
+        targets.push((
+            "mutation".to_string(),
+            "Mutation".to_string(),
+            knock_query(schema, "mutation", f),
+        ));
     }
 
     let max_knocks = 80usize;
     if targets.len() > max_knocks {
-        for (_, root, f) in targets.iter().skip(max_knocks) {
+        for (_, root, _) in targets.iter().skip(max_knocks) {
             result
                 .inconclusive
-                .push(format!("{}.{} (skipped: probe limit reached)", root, f.name));
+                .push(format!("{} (skipped: probe limit reached)", root));
         }
         targets.truncate(max_knocks);
     }
 
-    for (op_keyword, root, field) in targets {
-        if rate_limit_ms > 0 {
-            std::thread::sleep(Duration::from_millis(rate_limit_ms));
-        }
+    let parsed_headers = parse_extra_headers(extra_headers);
+    let mut futures = FuturesUnordered::new();
 
-        let mut req = client
-            .post(url)
-            .header("Content-Type", "application/json")
-            .header("User-Agent", "Introspectre/1.0 (Security-Audit-Only; Auth-Discovery)");
-        for (k, v) in parse_extra_headers(extra_headers) {
-            req = req.header(k, v);
-        }
+    // Throttled concurrency: process up to 5 concurrent probes
+    let concurrency_limit = 5;
+    let url_owned = url.to_string();
 
-        let query = knock_query(schema, &op_keyword, field);
-        let body = serde_json::json!({ "query": query });
-        let call = req.json(&body).send();
-        let label = format!("{}.{}", root, field.name);
-
-        let resp = match call {
-            Ok(r) => r,
-            Err(e) => {
-                result
-                    .inconclusive
-                    .push(format!("{} (network error: {})", label, e));
-                continue;
+    for (_op_keyword, root, query) in targets {
+        while futures.len() >= concurrency_limit {
+            if let Some(res) = futures.next().await {
+                process_discovery_result(res, &mut result);
             }
-        };
-
-        let status = resp.status();
-        if status.as_u16() == 401 || status.as_u16() == 403 {
-            result.protected.push(label);
-            continue;
         }
 
-        let parsed: Result<ProbeResponse, _> = resp.json();
-        let parsed = match parsed {
-            Ok(p) => p,
-            Err(_) => {
-                result
-                    .inconclusive
-                    .push(format!("{} (non-JSON response)", label));
-                continue;
-            }
-        };
+        let client = client.clone();
+        let url = url_owned.clone();
+        let headers = parsed_headers.clone();
 
-        if let Some(errors) = parsed.errors {
-            let messages = errors
-                .iter()
-                .map(|e| e.message.to_lowercase())
-                .collect::<Vec<_>>()
-                .join(" | ");
-
-            if is_auth_error(&messages) {
-                result.protected.push(label);
-                continue;
+        futures.push(tokio::spawn(async move {
+            if rate_limit_ms > 0 {
+                tokio::time::sleep(Duration::from_millis(rate_limit_ms)).await;
             }
 
-            if has_required_args(field) || is_public_likely_error(&messages) {
-                result.public.push(label);
-            } else {
-                result
-                    .inconclusive
-                    .push(format!("{} (graphql error: {})", label, messages));
+            let mut req = client
+                .post(&url)
+                .header("Content-Type", "application/json")
+                .header(
+                    "User-Agent",
+                    "Introspectre/1.0 (Security-Audit-Only; Auth-Discovery)",
+                );
+            for (k, v) in headers {
+                req = req.header(k, v);
             }
-            continue;
-        }
 
-        if parsed.data.is_some() {
-            result.public.push(label);
-        } else {
-            result.inconclusive.push(format!("{} (no data)", label));
-        }
+            let body = serde_json::json!({ "query": query });
+            // Extract field name from query for the label
+            let field_part = query.split_whitespace().nth(2).unwrap_or("unknown");
+            let label = format!("{}.{}", root, field_part);
+
+            let resp = req.json(&body).send().await;
+
+            match resp {
+                Ok(r) => {
+                    let status = r.status().as_u16();
+                    if status == 401 || status == 403 {
+                        return (label, status, None);
+                    }
+                    let parsed: Result<ProbeResponse, _> = r.json().await;
+                    (label, status, Some(parsed))
+                }
+                Err(_) => (label, 0, None),
+            }
+        }));
+    }
+
+    while let Some(res) = futures.next().await {
+        process_discovery_result(res, &mut result);
     }
 
     Ok(result)
+}
+
+type DiscoveryResult = (String, u16, Option<Result<ProbeResponse, reqwest::Error>>);
+
+fn process_discovery_result(
+    res: Result<DiscoveryResult, tokio::task::JoinError>,
+    result: &mut AuthDiscoveryResult,
+) {
+    if let Ok((label, status, parsed_opt)) = res {
+        if status == 401 || status == 403 {
+            result.protected.push(label);
+            return;
+        }
+
+        if status == 0 {
+            result
+                .inconclusive
+                .push(format!("{} (network error)", label));
+            return;
+        }
+
+        if let Some(parsed_res) = parsed_opt {
+            match parsed_res {
+                Ok(parsed) => {
+                    if let Some(errors) = parsed.errors {
+                        let messages = errors
+                            .iter()
+                            .map(|e| e.message.to_lowercase())
+                            .collect::<Vec<_>>()
+                            .join(" | ");
+
+                        if is_auth_error(&messages) {
+                            result.protected.push(label);
+                        } else if is_public_likely_error(&messages) {
+                            result.public.push(label);
+                        } else {
+                            result
+                                .inconclusive
+                                .push(format!("{} (graphql error: {})", label, messages));
+                        }
+                    } else if parsed.data.is_some() {
+                        result.public.push(label);
+                    } else {
+                        result.inconclusive.push(format!("{} (no data)", label));
+                    }
+                }
+                Err(_) => {
+                    result
+                        .inconclusive
+                        .push(format!("{} (non-JSON response)", label));
+                }
+            }
+        } else {
+            result
+                .inconclusive
+                .push(format!("{} (unknown error)", label));
+        }
+    }
 }

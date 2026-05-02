@@ -113,6 +113,10 @@ pub enum Commands {
         /// Maximum number of operations per batched request (only when --batch-probes is enabled)
         #[arg(long, default_value_t = 5)]
         batch_size: u32,
+
+        /// Custom candidate IDs for IDOR probing (comma-separated or repeatable)
+        #[arg(long, value_delimiter = ',')]
+        idor_payloads: Vec<String>,
     },
 
     /// Analyze a schema already saved to a JSON file

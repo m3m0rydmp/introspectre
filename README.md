@@ -1,270 +1,59 @@
 # introspectre
 
-A GraphQL security analyzer that identifies vulnerabilities in GraphQL APIs through schema introspection and active probing.
+`introspectre` is a powerful security analysis and auditing tool for GraphQL schemas. It combines static schema analysis with active probing to identify vulnerabilities like IDOR, Mass Assignment, Sensitive Data Exposure, and Denial of Service (DoS) risks.
 
-## Features
+## Commands
 
-- **Passive Analysis**: Examines GraphQL schema to identify security issues including:
-  - Exposed sensitive fields (email, password, ssn, etc.)
-  - Missing authentication directives
-  - Unvalidated user input in mutation arguments
-  - Deprecated and removed fields
-  - Circular type references
-  - Large attack surfaces
-  - Unused types and fields
+```text
+Usage: introspectre [OPTIONS] <COMMAND>
 
-- **Active Auditing**: Performs live endpoint testing:
-  - Unauthenticated access detection
-  - Insecure Direct Object References (IDOR)
-  - Query injection vulnerabilities
-  - Authentication boundary mapping
-  - PoC generation for confirmed findings
-
-- **Multi-Format Reporting**: Text, JSON, Markdown, and HTML output formats
-
-- **Configurable Analysis**: TOML-based pattern and probe configuration
-
-## Installation
-
-### Requirements
-- Rust 1.56 or later (install from [rustup.rs](https://rustup.rs/))
-
-The build and install workflow below applies to both Linux and Windows.
-
-### Build from Source (Linux and Windows)
-
-```bash
-git clone https://github.com/m3m0rydmp/graphql-tester.git
-cd graphql-tester
-cargo build --release
+Commands:
+  scan   Fetch schema via live introspection query and perform static analysis
+  audit  Active probing audit flow using schema-derived candidates
+  file   Analyze a schema already saved to a JSON file
+  help   Print this message or the help of the given subcommand(s)
 ```
 
-Compiled binary paths:
-- Linux: `target/release/introspectre`
-- Windows: `target/release/introspectre.exe`
+### Scan Options (`introspectre scan --help`)
+*   `--discover-auth`: Discover which root fields are protected vs public using unauthenticated knock probes.
+*   `--static-only`: Avoid active exploit payload probes (recommended for initial assessment).
+*   `--probe-first`: Run a lightweight GraphQL endpoint probe before introspection.
+*   `--rate-limit-ms <MS>`: Client-side delay before issuing requests (default: 750ms).
 
-### Install Binary (Linux and Windows)
+### Audit Options (`introspectre audit --help`)
+*   `--idor-payloads <IDS>`: Custom candidate IDs for IDOR probing.
+*   `--rate-limit-ms <MS>`: Important for avoiding WAF triggers during active probing.
 
+## Use Cases
+
+### 🟢 Safe / Passive Analysis
+Perfect for quick assessments or CI/CD pipelines where you don't want to trigger WAFs or affect server state.
 ```bash
-cargo install --path .
-```
-
-This installs the binary to your `~/.cargo/bin/` directory. Ensure this directory is in your `$PATH`.
-
-On Windows, the command is the same. Rust installs binaries to `%USERPROFILE%\\.cargo\\bin`; ensure that directory is in your `PATH`.
-
-### Windows Quick Start (PowerShell)
-
-```powershell
-git clone https://github.com/m3m0rydmp/graphql-tester.git
-cd graphql-tester
-cargo install --path .
-introspectre --help
-```
-
-## Quick Start
-
-### Analyze a Live Endpoint
-
-```bash
-introspectre scan https://api.example.com/graphql
-```
-
-### Analyze with Authentication
-
-```bash
-introspectre scan https://api.example.com/graphql --token "Bearer YOUR_TOKEN"
-```
-
-### Run Active Audit
-
-```bash
-introspectre audit https://api.example.com/graphql
-```
-
-### Analyze from JSON File
-
-```bash
+# Analyze a schema file locally without making any network requests
 introspectre file schema.json
+
+# Perform introspection and static analysis on a live endpoint (read-only)
+introspectre scan https://api.example.com/graphql --static-only
 ```
 
-## Usage
-
-### Global Options
-
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `--config` | PATH | None | Path to TOML configuration file |
-| `--format` | text\|json\|markdown | text | Output format |
-| `--max-affected` | NUMBER | 30 | Max affected entries shown per finding (0 = no limit) |
-| `--min-severity` | low\|medium\|high | None | Only show findings at or above this level |
-| `--html-report` | BOOL | false | Generate HTML report |
-| `--html-path` | PATH | introspectre-report.html | HTML report output location |
-| `--verbose` | BOOL | false | Show PoC blocks in text output |
-| `--token` | STRING | None | Bearer token for authenticated requests |
-
-### Scan Subcommand
-
-Fetch schema via introspection and analyze for vulnerabilities.
-
+### 🟡 Informed / Active Discovery
+Probes the endpoint to understand authentication guards and endpoint behavior.
 ```bash
-introspectre scan <URL> [OPTIONS]
+# Discover which fields require authentication and check for basic DoS vectors
+introspectre scan https://api.example.com/graphql --discover-auth --probe-first
 ```
 
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `--header` | KEY=VALUE | None | Extra request headers (repeatable) |
-| `--timeout` | SECONDS | 15 | HTTP request timeout |
-| `--static-only` | BOOL | true | Skip active exploit probes |
-| `--rate-limit-ms` | MILLISECONDS | 750 | Delay before issuing requests |
-| `--discover-auth` | BOOL | true | Probe for auth protection per field |
-| `--probe-first` | BOOL | true | Run endpoint probe before introspection |
-| `--probe-only` | BOOL | false | Only run endpoint probes (no analysis) |
-
-### Audit Subcommand
-
-Run active security probes against a live endpoint using schema-derived candidates.
-
+### 🔴 Destructive / Active Auditing (Use with Caution)
+Performs active probing using generated payloads. This may trigger alerts, modify data (if mutations are probed), or cause high load.
 ```bash
-introspectre audit <URL> [OPTIONS]
-```
-
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `--header` | KEY=VALUE | None | Extra request headers (repeatable) |
-| `--timeout` | SECONDS | 15 | Timeout per request |
-| `--rate-limit-ms` | MILLISECONDS | 750 | Delay before issuing requests |
-
-### File Subcommand
-
-Analyze a previously saved introspection JSON file.
-
-```bash
-introspectre file <PATH>
-```
-
-## Examples
-
-### Scan with custom headers
-
-```bash
-introspectre scan https://api.example.com/graphql \
-  --header "Authorization=Bearer token123" \
-  --header "X-API-Key=secret"
-```
-
-### Generate JSON report
-
-```bash
-introspectre scan https://api.example.com/graphql --format json > report.json
-```
-
-### Create HTML report
-
-```bash
-introspectre scan https://api.example.com/graphql \
-  --html-report \
-  --html-path security-report.html
-```
-
-### Run audit with verbose PoC output
-
-```bash
-introspectre audit https://api.example.com/graphql --verbose
-```
-
-### Filter by severity level
-
-```bash
-introspectre scan https://api.example.com/graphql --min-severity high
+# Actively probe for IDOR, SSRF, and complexity-based DoS vulnerabilities
+introspectre audit https://api.example.com/graphql --rate-limit-ms 1000 --idor-payloads "1,100,2024"
 ```
 
 ## Configuration
-
-The `config.toml` file will customize you analysis patterns. Either modify the existing file, or create your own:
-
-```toml
-# Sensitive field patterns
-[patterns.sensitive_fields]
-fields = ["password", "ssn", "credit_card", "api_key"]
-
-# SSRF argument patterns
-[patterns.ssrf_args]
-arguments = ["url", "uri", "endpoint"]
-
-# IDOR mutation patterns
-[patterns.idor_mutations]
-mutations = ["update", "delete", "assign"]
-
-# Query/field patterns to avoid
-[patterns.debug_types]
-types = ["Debug", "Internal", "Dev"]
-
-# Session and audit settings
-[session]
-auth_header = "Authorization"
-owned_ids = ["userId", "accountId"]
-
-[audit]
-test_unauth = true
-test_idor = true
-test_injection = true
-```
-
-## Output Examples
-
-### Text Output (default)
-
-```
-Finding: GQL-003 — Exposed Sensitive Fields
-Severity: HIGH | Confidence: CONFIRMED
-Found 2 sensitive fields in public queries:
-  • User.password (String!)
-  • Account.ssn (String)
-
-Remediation: Implement field-level authorization directives
-```
-
-### JSON Output
-
-```json
-{
-  "findings": [
-    {
-      "id": "GQL-003",
-      "title": "Exposed Sensitive Fields",
-      "severity": "HIGH",
-      "confidence": "CONFIRMED",
-      "affected": ["User.password", "Account.ssn"],
-      "poc": null
-    }
-  ]
-}
-```
-
-## Development
-
+Use a `config.toml` to customize sensitivity patterns and wordlists:
 ```bash
-# Build debug binary
-cargo build
-
-# Run tests
-cargo test
-
-# Check code without building
-cargo check
-
-# Format code
-cargo fmt
-
-# Lint
-cargo clippy
+introspectre --config custom_config.toml scan <URL>
 ```
 
-## Contributing
-
-Bug reports and feature requests are welcome. Please open an issue on the repository.
-
-## License
-
-MIT License. See LICENSE file for details.
+For more technical details, see [ARCHITECTURE.md](./ARCHITECTURE.md).

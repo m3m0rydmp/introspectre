@@ -106,6 +106,76 @@ pub struct GqlSchema {
     pub types: Vec<GqlType>,
 }
 
+impl GqlSchema {
+    pub fn fields_for_type(&self, type_name: Option<&str>) -> Vec<&GqlField> {
+        let name = match type_name {
+            Some(n) => n,
+            None => return vec![],
+        };
+        self.types
+            .iter()
+            .find(|t| t.name.as_deref() == Some(name))
+            .and_then(|t| t.fields.as_ref())
+            .map(|v| v.iter().collect())
+            .unwrap_or_default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_unwrap_type_name() {
+        let tr = GqlTypeRef {
+            kind: Some("NON_NULL".to_string()),
+            name: None,
+            of_type: Some(Box::new(GqlTypeRef {
+                kind: Some("LIST".to_string()),
+                name: None,
+                of_type: Some(Box::new(GqlTypeRef {
+                    kind: Some("OBJECT".to_string()),
+                    name: Some("User".to_string()),
+                    of_type: None,
+                })),
+            })),
+        };
+        assert_eq!(tr.unwrap_type_name(), Some("User".to_string()));
+    }
+
+    #[test]
+    fn test_fields_for_type() {
+        let schema = GqlSchema {
+            query_type: Some(NamedRef {
+                name: "Query".to_string(),
+            }),
+            mutation_type: None,
+            subscription_type: None,
+            directives: None,
+            types: vec![GqlType {
+                kind: Some("OBJECT".to_string()),
+                name: Some("Query".to_string()),
+                description: None,
+                fields: Some(vec![GqlField {
+                    name: "me".to_string(),
+                    is_deprecated: None,
+                    deprecation_reason: None,
+                    field_type: None,
+                    args: None,
+                }]),
+                input_fields: None,
+                enum_values: None,
+            }],
+        };
+        let fields = schema.fields_for_type(Some("Query"));
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields[0].name, "me");
+
+        let no_fields = schema.fields_for_type(Some("Unknown"));
+        assert!(no_fields.is_empty());
+    }
+}
+
 #[derive(Debug, Deserialize)]
 pub struct NamedRef {
     pub name: String,
@@ -170,6 +240,20 @@ pub struct GqlTypeRef {
     pub of_type: Option<Box<GqlTypeRef>>,
 }
 
+impl GqlTypeRef {
+    pub fn unwrap_type_name(&self) -> Option<String> {
+        if let Some(name) = &self.name {
+            if !name.is_empty() {
+                return Some(name.clone());
+            }
+        }
+        if let Some(inner) = &self.of_type {
+            return inner.unwrap_type_name();
+        }
+        None
+    }
+}
+
 #[derive(Debug, Deserialize)]
 pub struct GqlError {
     pub message: String,
@@ -177,6 +261,8 @@ pub struct GqlError {
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub enum Severity {
+    #[serde(rename = "info")]
+    Info,
     #[serde(rename = "low")]
     Low,
     #[serde(rename = "medium")]
@@ -190,6 +276,7 @@ impl std::str::FromStr for Severity {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
+            "info" => Ok(Severity::Info),
             "low" => Ok(Severity::Low),
             "medium" | "med" => Ok(Severity::Medium),
             "high" => Ok(Severity::High),
@@ -201,6 +288,7 @@ impl std::str::FromStr for Severity {
 impl std::fmt::Display for Severity {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Severity::Info => write!(f, "INFO"),
             Severity::High => write!(f, "HIGH"),
             Severity::Medium => write!(f, "MEDIUM"),
             Severity::Low => write!(f, "LOW"),

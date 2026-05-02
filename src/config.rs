@@ -55,6 +55,12 @@ pub struct PatternConfig {
     pub idor_mutations: PatternPrefixes,
     #[serde(default = "default_debug_types")]
     pub debug_types: PatternNames,
+    #[serde(default = "default_auth_directives")]
+    pub auth_directives: PatternNames,
+    #[serde(default = "default_user_scope_hints")]
+    pub user_scope_hints: PatternNames,
+    #[serde(default = "default_cross_domain_hints")]
+    pub cross_domain_hints: PatternNames,
     #[serde(default)]
     pub operation_names: PatternNames,
 }
@@ -66,6 +72,9 @@ impl Default for PatternConfig {
             ssrf_args: default_ssrf_args(),
             idor_mutations: default_idor_mutations(),
             debug_types: default_debug_types(),
+            auth_directives: default_auth_directives(),
+            user_scope_hints: default_user_scope_hints(),
+            cross_domain_hints: default_cross_domain_hints(),
             operation_names: PatternNames::default(),
         }
     }
@@ -101,6 +110,12 @@ pub struct AuditConfig {
     pub test_idor: bool,
     #[serde(default)]
     pub test_injection: bool,
+    #[serde(default = "default_true")]
+    pub test_complexity: bool,
+    #[serde(default = "default_true")]
+    pub test_batching: bool,
+    #[serde(default = "default_true")]
+    pub test_alias_dos: bool,
 }
 
 impl Default for AuditConfig {
@@ -109,6 +124,9 @@ impl Default for AuditConfig {
             test_unauth: true,
             test_idor: true,
             test_injection: false,
+            test_complexity: true,
+            test_batching: true,
+            test_alias_dos: true,
         }
     }
 }
@@ -142,6 +160,16 @@ fn default_sensitive_fields() -> PatternNames {
             "cookie",
             "bearer",
             "key",
+            "email",
+            "phone",
+            "address",
+            "profile",
+            "balance",
+            "wallet",
+            "invoice",
+            "payment",
+            "ssrf",
+            "bypass",
         ]
         .into_iter()
         .map(str::to_string)
@@ -151,19 +179,29 @@ fn default_sensitive_fields() -> PatternNames {
 
 fn default_ssrf_args() -> PatternNames {
     PatternNames {
-        names: vec!["url", "webhook", "callback", "redirect", "endpoint", "image_url"]
-            .into_iter()
-            .map(str::to_string)
-            .collect(),
+        names: vec![
+            "url",
+            "webhook",
+            "callback",
+            "redirect",
+            "endpoint",
+            "image_url",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect(),
     }
 }
 
 fn default_idor_mutations() -> PatternPrefixes {
     PatternPrefixes {
-        prefixes: vec!["delete", "remove", "update", "download", "export"]
-            .into_iter()
-            .map(str::to_string)
-            .collect(),
+        prefixes: vec![
+            "delete", "remove", "update", "download", "export", "invite", "add", "transfer",
+            "change", "set", "edit", "create",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect(),
     }
 }
 
@@ -178,6 +216,69 @@ fn default_debug_types() -> PatternNames {
             "dev",
             "staging",
             "root",
+            "namespace",
+            "system",
+            "config",
+            "settings",
+            "preferences",
+            "metrics",
+            "logs",
+            "beta",
+            "experimental",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect(),
+    }
+}
+
+fn default_auth_directives() -> PatternNames {
+    PatternNames {
+        names: vec![
+            "auth",
+            "authenticated",
+            "authorized",
+            "isAuthenticated",
+            "requiresAuth",
+            "hasRole",
+            "permission",
+            "authorize",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect(),
+    }
+}
+
+fn default_user_scope_hints() -> PatternNames {
+    PatternNames {
+        names: vec!["userid", "user_id", "ownerid", "owner_id", "email"]
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+    }
+}
+
+fn default_cross_domain_hints() -> PatternNames {
+    PatternNames {
+        names: vec![
+            "programdata",
+            "program_data",
+            "paymentinfo",
+            "payment_info",
+            "privatecomment",
+            "private_comment",
+            "reportsources",
+            "report_sources",
+            "tenant",
+            "org",
+            "organization",
+            "workspace",
+            "billing",
+            "subscription",
+            "invoices",
+            "roles",
+            "permissions",
         ]
         .into_iter()
         .map(str::to_string)

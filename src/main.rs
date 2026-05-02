@@ -1,3 +1,5 @@
+#![allow(clippy::too_many_arguments)]
+
 mod analysis;
 mod audit;
 mod cli;
@@ -10,7 +12,9 @@ use clap::Parser;
 use colored::Colorize;
 
 use analysis::analyze;
-use audit::{print_audit_json_report, print_audit_markdown_report, print_audit_text_report, run_audit};
+use audit::{
+    print_audit_json_report, print_audit_markdown_report, print_audit_text_report, run_audit,
+};
 use cli::{Cli, Commands, OutputFormat};
 use config::AppConfig;
 use io_ops::{
@@ -19,7 +23,8 @@ use io_ops::{
 use report::{print_json_report, print_markdown_report, print_text_report, write_html_report};
 use types::ReportMeta;
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let cli = Cli::parse();
     let mut app_config = if let Some(config_path) = &cli.config {
         match AppConfig::load_from_path(config_path) {
@@ -45,23 +50,21 @@ fn main() {
         rate_limit_ms,
         batch_probes,
         batch_size,
+        idor_payloads,
     } = &cli.command
     {
-        let schema = match fetch_introspection(
-            url,
-            headers,
-            *timeout,
-            *rate_limit_ms,
-            cli.token.as_deref(),
-        ) {
-            Ok(s) => s,
-            Err(e) => {
-                eprintln!("{} {}", "  ✗ Error:".red().bold(), e);
-                std::process::exit(2);
-            }
-        };
+        let schema =
+            match fetch_introspection(url, headers, *timeout, *rate_limit_ms, cli.token.as_deref())
+                .await
+            {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("{} {}", "  ✗ Error:".red().bold(), e);
+                    std::process::exit(1);
+                }
+            };
 
-        let (passive_findings, _stats) = analyze(&schema, &app_config.patterns);
+        let (passive_findings, _) = analyze(&schema, &app_config.patterns, cli.token.as_deref());
         let report = match run_audit(
             &schema,
             url,
@@ -70,9 +73,12 @@ fn main() {
             *rate_limit_ms,
             &app_config,
             &passive_findings,
+            idor_payloads,
             *batch_probes,
             *batch_size,
-        ) {
+        )
+        .await
+        {
             Ok(r) => r,
             Err(e) => {
                 eprintln!("{} {}", "  ✗ Error:".red().bold(), e);
@@ -128,10 +134,16 @@ fn main() {
                     *timeout,
                     *rate_limit_ms,
                     cli.token.as_deref(),
-                ) {
+                )
+                .await
+                {
                     Ok(r) => {
                         if cli.format == OutputFormat::Text {
-                            let marker = if r.graphql_confirmed { "✓".green().bold() } else { "!".yellow().bold() };
+                            let marker = if r.graphql_confirmed {
+                                "✓".green().bold()
+                            } else {
+                                "!".yellow().bold()
+                            };
                             eprintln!("  {} {} (HTTP {})", marker, r.summary, r.http_status);
                         }
                         probe_result = Some(r);
@@ -172,33 +184,31 @@ fn main() {
                 *timeout,
                 *rate_limit_ms,
                 cli.token.as_deref(),
-            ) {
+            )
+            .await
+            {
                 Ok(s) => s,
                 Err(e) => {
                     if let Some(probe) = &probe_result {
                         if probe.graphql_confirmed {
                             eprintln!(
-                                "{} {}",
-                                "  ! Note:".yellow().bold(),
-                                "GraphQL appears to be running, but introspection could not be retrieved."
+                                "{} GraphQL appears to be running, but introspection could not be retrieved.",
+                                "  ! Note:".yellow().bold()
                             );
                             if probe.auth_likely_required {
                                 eprintln!(
-                                    "{} {}",
-                                    "  ! Hint:".yellow().bold(),
-                                    "Endpoint may be auth-gated. Retry with --token <JWT>."
+                                    "{} Endpoint may be auth-gated. Retry with --token <JWT>.",
+                                    "  ! Hint:".yellow().bold()
                                 );
                             }
                             eprintln!(
-                                "{} {}",
-                                "  ! Hint:".yellow().bold(),
-                                "If this is expected, use `file <schema.json>` mode for offline static analysis."
+                                "{} If this is expected, use `file <schema.json>` mode for offline static analysis.",
+                                "  ! Hint:".yellow().bold()
                             );
                         } else if probe.content_type_or_json_issue {
                             eprintln!(
-                                "{} {}",
-                                "  ! Hint:".yellow().bold(),
-                                "Probe received non-GraphQL JSON behavior. Re-check endpoint path and required headers."
+                                "{} Probe received non-GraphQL JSON behavior. Re-check endpoint path and required headers.",
+                                "  ! Hint:".yellow().bold()
                             );
                         }
                     }
@@ -215,15 +225,13 @@ fn main() {
                         "→".blue().bold()
                     );
                 }
-                match discover_auth_requirements(&schema, url, headers, *timeout, *rate_limit_ms) {
+                match discover_auth_requirements(&schema, url, headers, *timeout, *rate_limit_ms)
+                    .await
+                {
                     Ok(r) => auth_discovery = Some(r),
                     Err(e) => {
                         if cli.format == OutputFormat::Text {
-                            eprintln!(
-                                "{} {}",
-                                "  ! Auth discovery skipped:".yellow().bold(),
-                                e
-                            );
+                            eprintln!("{} {}", "  ! Auth discovery skipped:".yellow().bold(), e);
                         }
                     }
                 }
@@ -252,13 +260,13 @@ fn main() {
         Commands::Audit { .. } => unreachable!("audit is handled in early-return block"),
     };
 
-    let (mut findings, stats) = analyze(&schema, &app_config.patterns);
+    let (mut findings, stats) = analyze(&schema, &app_config.patterns, cli.token.as_deref());
 
     if let Some(min) = &cli.min_severity {
         findings.retain(|f| &f.severity >= min);
     }
 
-    findings.sort_by(|a, b| b.severity.cmp(&a.severity).then(a.id.cmp(&b.id)));
+    findings.sort_by(|a, b| b.severity.cmp(&a.severity).then(a.id.cmp(b.id)));
 
     let meta = ReportMeta {
         source,
