@@ -32,3 +32,7 @@ instructions2.md
 
 # Test files
 test.json
+
+# Sensitive research data
+h1_graphql_data.json
+h1_wordlist.txt
