@@ -12,7 +12,7 @@ This tool is built with Rust. If you don't have it installed:
 ### 2. Build the tool
 Clone the repository and build the binary:
 ```bash
-git clone <repository-url>
+git clone https://github.com/m3m0rydmp/introspectre.git
 cd introspectre
 cargo build --release
 ```
