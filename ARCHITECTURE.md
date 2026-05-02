@@ -1,47 +1,104 @@
 # introspectre: Technical Architecture
 
-This document describes the internal workings and security heuristics of `introspectre`.
+This document provides an in-depth look at the internal design, performance optimizations, and security heuristics used by `introspectre`.
 
-## 1. Data Collection Phase
+## 1. Data Collection & Introspection
 
-### Introspection Engine
-The tool uses a standard `IntrospectionQuery` to retrieve the full schema from a target endpoint. It handles various server implementations by gracefully degrading the query if certain modern features (like `isRepeatable` on directives) are missing.
+The tool relies on retrieving the schema directly from the GraphQL server. This is achieved through the **Introspection Engine**.
 
-### Endpoint Probing
-Before full introspection, `introspectre` can perform a "knock" probe. It sends a minimal `query { __typename }` request to:
-1.  Confirm GraphQL is actually hosted at the URL.
-2.  Determine if introspection is enabled or if it requires a token.
-3.  Detect the underlying server technology (Apollo, Yoga, etc.) via HTTP headers.
+### Introspection Query
+We use a robust query that retrieves types, fields, arguments, enums, unions, and directives. To maintain compatibility with older or strictly configured servers, we use a fragmented query structure:
 
-## 2. Analysis Engine (Static)
+```graphql
+query IntrospectionQuery {
+  __schema {
+    queryType { name }
+    mutationType { name }
+    subscriptionType { name }
+    types {
+      kind name description
+      fields(includeDeprecated: true) {
+        name isDeprecated deprecationReason
+        type { ...TypeRef }
+        args { name type { ...TypeRef } }
+      }
+      inputFields { name type { ...TypeRef } }
+      # ... other schema details
+    }
+  }
+}
+```
 
-The static analysis engine operates on the retrieved JSON schema and applies several heuristic-based modules:
+## 2. Performance Optimizations ($O(1)$ Lookups)
 
-### Information Exposure
-*   **Sensitive Field Detection**: Uses regex and keyword matching (enriched by HackerOne data) to identify fields like `password`, `token`, `secret`, `ssn`, etc.
-*   **Mass Assignment**: Specifically looks for mutations where the `INPUT_OBJECT` contains fields that match sensitive patterns (e.g., `isAdmin`, `role`).
-*   **Leakage Heuristics**: Identifies types that combine user-specific data (e.g., `myProfile`) with broad organizational data, signaling potential tenant isolation issues.
+Scanning large schemas (often containing thousands of types) can be slow if implemented with naive $O(n^2)$ loops. `introspectre` optimizes this by building an in-memory index of the schema immediately after retrieval.
 
-### Denial of Service (DoS) Detection
-*   **Recursive Structures**: Scans for circular references (A -> B -> A) and self-referencing fields.
-*   **List Inflation**: Detects list-returning fields that nested additional lists, creating an exponential response size risk.
-*   **Pagination Gaps**: Flags list fields that do not accept common pagination arguments (`first`, `limit`, `offset`), which can be used to scrape large datasets.
+### Indexing Strategy
+We use `HashMap` collections to allow constant-time resolution of types during analysis:
 
-### Access Control Review
-*   **Auth Directives**: Checks if mutations and sensitive fields have declarative protection (`@auth`, `@hasRole`).
-*   **IDOR Candidates**: Automatically identifies every field/mutation that accepts an `ID` or `UUID` argument.
+```rust
+// In src/analysis/information_exposure.rs
+let type_map: HashMap<&str, &GqlType> = schema.types.iter()
+    .filter_map(|t| t.name.as_deref().map(|n| (n, t)))
+    .collect();
+```
 
-## 3. Audit Engine (Active)
+This map allows the tool to instantly resolve `INPUT_OBJECT` references during Mass Assignment checks without re-scanning the entire type list for every mutation.
 
-The `audit` command moves beyond static analysis by issuing actual requests to the target:
+## 3. Core Security Heuristics
 
-### Authentication Guard Discovery
-Sends a series of requests to every root query/mutation field without a token. It analyzes the HTTP status (401/403) and GraphQL error messages (e.g., "Not Authorized") to map the "Protected vs Public" boundary of the API.
+### Mass Assignment Detection (`GQL-017`)
+This heuristic identifies mutations that accept complex objects where internal fields match sensitive keywords.
 
-### Complexity & Cost Probing
-Issues a query with multiple aliased `__typename` calls. It inspects the `extensions` field in the response to see if the server returns complexity scores or cost metrics, which helps an attacker understand the cost limits of the system.
+**Detection Logic:**
+1. Identify all `Mutation` fields.
+2. Resolve the `INPUT_OBJECT` type of each argument.
+3. Recursively check if that input type contains fields like `isAdmin`, `role`, or `status`.
 
-## 4. Performance Optimizations
-The tool is written in Rust for high performance:
-*   **O(1) Lookups**: Uses `HashMap` and `HashSet` for schema traversal, ensuring even massive schemas (10k+ fields) are analyzed in milliseconds.
-*   **Asynchronous I/O**: Uses `tokio` and `reqwest` to perform network probes in parallel while respecting user-defined rate limits.
+```rust
+for f in &mutation_fields {
+    for arg in args {
+        if let Some(input_type) = type_map.get(input_type_name) {
+            if let Some(input_fields) = &input_type.input_fields {
+                for input_field in input_fields {
+                    if matches_pattern(&input_field.name, &patterns.sensitive_fields.names) {
+                        // Flag potential Mass Assignment
+                    }
+                }
+            }
+        }
+    }
+}
+```
+
+### Denial of Service (DoS) Analysis
+We detect structural weaknesses that can be exploited for "Query Complexity" attacks.
+
+*   **Circular References (`GQL-003`)**: Detected by building a graph of type relationships and looking for cycles (e.g., `User` -> `Posts` -> `User`).
+*   **List Inflation (`GQL-DOS-001`)**: Identifies fields that return lists of objects which *also* contain list-returning fields.
+
+### IDOR / BOLA Discovery (`GQL-013`)
+The tool leverages an enriched prefix list (from HackerOne data) to identify every field that accepts an identifier.
+
+```rust
+let idor_arg_matches = |arg_name: &str| {
+    let lower = arg_name.to_lowercase();
+    matches!(lower.as_str(), "id" | "uuid" | "userid")
+        || lower.ends_with("id")
+        || lower.ends_with("_id")
+};
+```
+
+## 4. Active Probing Lifecycle
+
+When running the `audit` command, the tool enters an active discovery phase:
+
+1.  **Knock Probe**: A single query for `__typename` to verify the endpoint and check for basic WAF presence.
+2.  **Auth Discovery**: Sequentially (but with throttled concurrency) requests every root field without a token. It parses the `errors` array for common authorization failure patterns.
+3.  **Complexity Probe**: Issues multiple aliased queries to see if the server returns cost/complexity headers or JSON extensions, which reveals internal throttling limits.
+
+## 5. Technology Stack
+*   **Rust**: For memory safety, speed, and concurrency.
+*   **Tokio**: Asynchronous runtime for parallel network probing.
+*   **Reqwest**: HTTP client with support for custom headers and timeouts.
+*   **Clap**: Robust CLI argument parsing.

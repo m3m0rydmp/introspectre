@@ -2,7 +2,27 @@
 
 `introspectre` is a powerful security analysis and auditing tool for GraphQL schemas. It combines static schema analysis with active probing to identify vulnerabilities like IDOR, Mass Assignment, Sensitive Data Exposure, and Denial of Service (DoS) risks.
 
-## Commands
+## 🚀 Installation & Setup
+
+### 1. Install Rust
+This tool is built with Rust. If you don't have it installed:
+*   **Linux/macOS:** `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
+*   **Windows:** Download and run [rustup-init.exe](https://rustup.rs/)
+
+### 2. Build the tool
+Clone the repository and build the binary:
+```bash
+git clone <repository-url>
+cd introspectre
+cargo build --release
+```
+The binary will be located at `./target/release/introspectre`.
+
+### Platform Specifics
+*   **Linux:** Ensure you have `pkg-config` and `openssl-devel` (or `libssl-dev`) installed if building from source.
+*   **Windows:** Requires Visual Studio Build Tools with the C++ workload installed.
+
+## 🛠 Commands
 
 ```text
 Usage: introspectre [OPTIONS] <COMMAND>
